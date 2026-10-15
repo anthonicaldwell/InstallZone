@@ -20,6 +20,7 @@ pkg_check_modules(SDL2 REQUIRED sdl2)
 set(IZ_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party
+    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/stb
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/imgui
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/imgui/backends
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/duktape
@@ -49,6 +50,7 @@ set(CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/iz_archive.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/iz_system.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/iz_ui_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/iz_cmake_scanner.cpp
     ${THIRD_PARTY_SOURCES}
 )
 
@@ -80,6 +82,12 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../assets/desktop/installzone-studio.d
 
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../assets/icons/installzone-studio.svg
     DESTINATION share/icons/hicolor/scalable/apps
+)
+
+install(FILES 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../assets/banner.jpg
+    ${CMAKE_CURRENT_SOURCE_DIR}/../assets/banner.png
+    DESTINATION share/installzone/assets
 )
 
 install(TARGETS installzone-runner

@@ -4,9 +4,13 @@
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_opengl.h>
+#include <unistd.h>
 #include "imgui.h"
 #include "backends/imgui_impl_sdl2.h"
 #include "backends/imgui_impl_opengl2.h"
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb/stb_image.h"
 
 namespace iz {
 
@@ -150,6 +154,10 @@ void UIContext::Shutdown() {
             SDL_DestroyWindow(m_window);
             m_window = nullptr;
         }
+        if (m_banner_texture) {
+            glDeleteTextures(1, &m_banner_texture);
+            m_banner_texture = 0;
+        }
         SDL_Quit();
         m_initialized = false;
     }
@@ -268,6 +276,105 @@ void UIContext::RenderLanguageSelector() {
         }
         ImGui::EndCombo();
     }
+}
+
+unsigned int UIContext::LoadTextureFromFile(const char* filepath, int* out_width, int* out_height) {
+    if (!filepath || access(filepath, R_OK) != 0) return 0;
+
+    int w = 0, h = 0, channels = 0;
+    unsigned char* data = stbi_load(filepath, &w, &h, &channels, 4);
+    if (!data) return 0;
+
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    stbi_image_free(data);
+
+    if (out_width) *out_width = w;
+    if (out_height) *out_height = h;
+    return tex;
+}
+
+unsigned int UIContext::LoadBannerTexture() {
+    if (m_banner_texture != 0) return m_banner_texture;
+
+    const char* paths[] = {
+        "assets/banner.jpg",
+        "assets/banner.png",
+        "../assets/banner.jpg",
+        "../assets/banner.png",
+        "/usr/local/share/installzone/assets/banner.jpg",
+        "/usr/local/share/installzone/assets/banner.png"
+    };
+
+    const char* home = std::getenv("HOME");
+    std::string home_banner = (home ? std::string(home) : "") + "/.local/share/installzone/assets/banner.jpg";
+
+    for (const char* p : paths) {
+        if (access(p, R_OK) == 0) {
+            m_banner_texture = LoadTextureFromFile(p, &m_banner_width, &m_banner_height);
+            if (m_banner_texture) return m_banner_texture;
+        }
+    }
+
+    if (!home_banner.empty() && access(home_banner.c_str(), R_OK) == 0) {
+        m_banner_texture = LoadTextureFromFile(home_banner.c_str(), &m_banner_width, &m_banner_height);
+    }
+
+    return m_banner_texture;
+}
+
+void UIContext::RenderBanner(unsigned int texture_id, float banner_height) {
+    if (!texture_id) {
+        texture_id = LoadBannerTexture();
+    }
+    if (!texture_id) return;
+
+    float avail_width = ImGui::GetContentRegionAvail().x;
+    ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImVec2 p1 = ImVec2(p0.x + avail_width, p0.y + banner_height);
+
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+    // Render image with rounded corners
+    draw_list->AddImageRounded(
+        static_cast<ImTextureID>(texture_id),
+        p0, p1,
+        ImVec2(0, 0), ImVec2(1, 1),
+        IM_COL32(255, 255, 255, 255), 6.0f
+    );
+
+    // Early 2000's GPU box art retro effects:
+    // 1. Cyber cyan/electric blue glowing border
+    draw_list->AddRect(p0, p1, IM_COL32(0, 220, 255, 180), 6.0f, 0, 2.0f);
+
+    // 2. Scanline effect overlay (vintage CRT scanlines)
+    for (float y = p0.y; y < p1.y; y += 4.0f) {
+        draw_list->AddLine(ImVec2(p0.x, y), ImVec2(p1.x, y), IM_COL32(0, 0, 0, 35), 1.0f);
+    }
+
+    // 3. Vintage CRT phosphor sheen / vignette on edges
+    draw_list->AddRectFilledMultiColor(
+        p0, ImVec2(p0.x + 35.0f, p1.y),
+        IM_COL32(0, 0, 0, 110), IM_COL32(0, 0, 0, 0),
+        IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 110)
+    );
+    draw_list->AddRectFilledMultiColor(
+        ImVec2(p1.x - 35.0f, p0.y), p1,
+        IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 110),
+        IM_COL32(0, 0, 0, 110), IM_COL32(0, 0, 0, 0)
+    );
+
+    // Advance cursor past banner
+    ImGui::Dummy(ImVec2(avail_width, banner_height));
+    ImGui::Spacing();
 }
 
 } // namespace iz

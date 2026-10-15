@@ -54,12 +54,19 @@ public:
 
     void ApplyTheme();
     void RenderLanguageSelector();
+    void RenderBanner(unsigned int texture_id, float banner_height = 115.0f);
+
+    unsigned int LoadBannerTexture();
+    static unsigned int LoadTextureFromFile(const char* filepath, int* out_width = nullptr, int* out_height = nullptr);
 
     SDL_Window* GetWindow() const { return m_window; }
 
 private:
     SDL_Window* m_window{nullptr};
     SDL_GLContext m_gl_context{nullptr};
+    unsigned int m_banner_texture{0};
+    int m_banner_width{0};
+    int m_banner_height{0};
     bool m_initialized{false};
 };
 

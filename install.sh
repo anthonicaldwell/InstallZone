@@ -39,8 +39,9 @@ BIN_DIR="$INSTALL_PREFIX/bin"
 APPS_DIR="$INSTALL_PREFIX/share/applications"
 ICONS_DIR="$INSTALL_PREFIX/share/icons/hicolor/scalable/apps"
 TEMPLATES_DIR="$INSTALL_PREFIX/share/installzone/templates"
+ASSETS_DIR="$INSTALL_PREFIX/share/installzone/assets"
 
-mkdir -p "$BIN_DIR" "$APPS_DIR" "$ICONS_DIR" "$TEMPLATES_DIR"
+mkdir -p "$BIN_DIR" "$APPS_DIR" "$ICONS_DIR" "$TEMPLATES_DIR" "$ASSETS_DIR"
 
 # Install binaries
 install -m 0755 build/installzone-studio "$BIN_DIR/installzone-studio"
@@ -50,6 +51,8 @@ install -m 0755 build/installzone-runner "$TEMPLATES_DIR/installzone-runner"
 # Install desktop shortcut & icon
 install -m 0644 assets/desktop/installzone-studio.desktop "$APPS_DIR/installzone-studio.desktop"
 install -m 0644 assets/icons/installzone-studio.svg "$ICONS_DIR/installzone-studio.svg"
+install -m 0644 assets/banner.jpg "$ASSETS_DIR/banner.jpg"
+install -m 0644 assets/banner.png "$ASSETS_DIR/banner.png"
 
 echo "[4/4] Updating desktop database and icon caches..."
 if command -v update-desktop-database >/dev/null 2>&1; then

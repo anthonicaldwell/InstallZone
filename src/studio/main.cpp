@@ -3,6 +3,7 @@
 #include "iz_archive.h"
 #include "iz_system.h"
 #include "iz_js_engine.h"
+#include "iz_cmake_scanner.h"
 #include "iz_i18n.h"
 #include "iz_assert.h"
 
@@ -29,7 +30,7 @@ public:
     void Run() {
         I18n::Initialize();
 
-        if (m_ui.Initialize(_("app_title_studio"), 1024, 720) != StatusCode::Success) {
+        if (m_ui.Initialize(_("app_title_studio"), 1060, 800) != StatusCode::Success) {
             std::cerr << "Failed to initialize Studio UI.\n";
             return;
         }
@@ -88,6 +89,18 @@ private:
     std::thread m_worker_thread;
 
     bool m_show_about_dialog{false};
+    char m_buf_cmake_path[kMaxPathLen] = "CMakeLists.txt";
+    bool m_show_cmake_modal{false};
+    std::vector<std::string> m_cmake_scan_log;
+
+    void ScanCMakeFile(const std::string& path) {
+        m_cmake_scan_log.clear();
+        StatusCode res = CMakeScanner::ApplyToProject(path, m_project, &m_cmake_scan_log);
+        if (res == StatusCode::Success) {
+            SyncProjectToBuffers();
+        }
+        m_show_cmake_modal = true;
+    }
 
     void SyncProjectToBuffers() {
         std::snprintf(m_buf_app_name, sizeof(m_buf_app_name), "%s", m_project.app_name.c_str());
@@ -161,6 +174,10 @@ private:
 
         RenderMenuBar();
 
+        // Retro 2000's GPU Box Art Header Banner
+        m_ui.RenderBanner(0, 110.0f);
+        ImGui::Spacing();
+
         if (ImGui::BeginTabBar("StudioTabs", ImGuiTabBarFlags_None)) {
             if (ImGui::BeginTabItem(_("tab_general"))) {
                 RenderGeneralTab();
@@ -190,6 +207,7 @@ private:
         }
 
         RenderAboutModal();
+        RenderCMakeModal();
         ImGui::End();
     }
 
@@ -218,6 +236,10 @@ private:
                     std::string save_path = m_project.app_name + ".izproj";
                     m_project.SaveToFile(save_path);
                     m_current_project_file = save_path;
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Scan CMakeLists.txt...", "Ctrl+M")) {
+                    ScanCMakeFile(m_buf_cmake_path);
                 }
                 ImGui::Separator();
                 if (ImGui::MenuItem(_("btn_exit"), "Alt+F4")) {
@@ -249,6 +271,29 @@ private:
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "%s", _("tab_general"));
         ImGui::Separator();
+        ImGui::Spacing();
+
+        // CMake Auto-Scan Card
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.16f, 0.20f, 0.27f, 0.85f));
+        if (ImGui::BeginChild("CMakeScanCard", ImVec2(-1, 80), true)) {
+            ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "CMake Project Scanner & Auto-Populate:");
+            ImGui::SameLine();
+            ImGui::TextDisabled("(Extracts project name, version, targets, install rules, and apt dependencies)");
+
+            ImGui::SetNextItemWidth(380.0f);
+            ImGui::InputTextWithHint("##CMakeScanPath", "Path to CMakeLists.txt", m_buf_cmake_path, sizeof(m_buf_cmake_path));
+            ImGui::SameLine();
+            if (ImGui::Button("Scan CMakeLists.txt")) {
+                ScanCMakeFile(m_buf_cmake_path);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Quick Scan src/CMakeLists.txt")) {
+                std::snprintf(m_buf_cmake_path, sizeof(m_buf_cmake_path), "src/CMakeLists.txt");
+                ScanCMakeFile(m_buf_cmake_path);
+            }
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
         ImGui::Spacing();
 
         ImGui::Columns(2, "GeneralCols", false);
@@ -727,6 +772,29 @@ private:
             ImGui::Spacing();
             if (ImGui::Button("Close", ImVec2(120, 0))) {
                 m_show_about_dialog = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+
+    void RenderCMakeModal() {
+        if (m_show_cmake_modal) {
+            ImGui::OpenPopup("CMake Scanner Results");
+        }
+
+        if (ImGui::BeginPopupModal("CMake Scanner Results", &m_show_cmake_modal, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "CMakeLists.txt Scan Report:");
+            ImGui::Separator();
+            if (ImGui::BeginChild("CMakeLogBox", ImVec2(560, 220), true)) {
+                for (const auto& line : m_cmake_scan_log) {
+                    ImGui::TextUnformatted(line.c_str());
+                }
+            }
+            ImGui::EndChild();
+            ImGui::Spacing();
+            if (ImGui::Button("Close", ImVec2(120, 0))) {
+                m_show_cmake_modal = false;
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();

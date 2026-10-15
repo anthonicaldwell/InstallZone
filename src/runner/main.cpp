@@ -44,7 +44,7 @@ public:
         }
 
         std::string win_title = std::string(_("app_title_runner")) + " - " + m_project.app_name;
-        if (m_ui.Initialize(win_title.c_str(), 720, 520) != StatusCode::Success) {
+        if (m_ui.Initialize(win_title.c_str(), 740, 640) != StatusCode::Success) {
             std::cerr << "Failed to initialize Runner UI.\n";
             return;
         }
@@ -139,6 +139,10 @@ private:
         m_ui.RenderLanguageSelector();
 
         ImGui::Separator();
+        ImGui::Spacing();
+
+        // Top banner with early 2000's GPU box art retro aesthetic
+        m_ui.RenderBanner(0, 110.0f);
         ImGui::Spacing();
 
         switch (m_current_page) {
