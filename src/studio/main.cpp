@@ -1,0 +1,745 @@
+#include "iz_ui_common.h"
+#include "iz_project.h"
+#include "iz_archive.h"
+#include "iz_system.h"
+#include "iz_js_engine.h"
+#include "iz_i18n.h"
+#include "iz_assert.h"
+
+#include "imgui.h"
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <thread>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+namespace iz {
+
+class StudioApp {
+public:
+    StudioApp() {
+        m_project.ResetToDefaults();
+        FindDefaultRunnerTemplate();
+        m_output_installer_path = "dist/" + m_project.app_name + "-Installer.run";
+    }
+
+    void Run() {
+        I18n::Initialize();
+
+        if (m_ui.Initialize(_("app_title_studio"), 1024, 720) != StatusCode::Success) {
+            std::cerr << "Failed to initialize Studio UI.\n";
+            return;
+        }
+
+        while (m_ui.ProcessEvents()) {
+            m_ui.BeginFrame();
+            RenderUI();
+            m_ui.EndFrame();
+        }
+
+        if (m_worker_thread.joinable()) {
+            m_worker_thread.join();
+        }
+        m_ui.Shutdown();
+    }
+
+private:
+    UIContext m_ui;
+    Project m_project;
+    std::string m_current_project_file;
+    std::string m_runner_template_path;
+    std::string m_output_installer_path;
+
+    // UI state buffers
+    char m_buf_app_name[kMaxNameLen] = {0};
+    char m_buf_app_id[kMaxNameLen] = {0};
+    char m_buf_version[64] = {0};
+    char m_buf_author[kMaxNameLen] = {0};
+    char m_buf_category[kMaxNameLen] = {0};
+    char m_buf_license[64] = {0};
+    char m_buf_prefix[kMaxPathLen] = {0};
+    char m_buf_desc[kMaxDescLen] = {0};
+
+    char m_buf_new_src[kMaxPathLen] = {0};
+    char m_buf_new_dst[kMaxPathLen] = {0};
+    int m_new_perms{0755};
+
+    char m_buf_dep_name[kMaxNameLen] = {0};
+    char m_buf_dep_pkg[kMaxNameLen] = {0};
+    char m_buf_dep_cmd[kMaxPathLen] = {0};
+    bool m_dep_required{true};
+
+    char m_buf_desktop_name[kMaxNameLen] = {0};
+    char m_buf_desktop_exec[kMaxPathLen] = {0};
+    char m_buf_desktop_icon[kMaxPathLen] = {0};
+    char m_buf_desktop_cats[kMaxNameLen] = {0};
+
+    // Script buffers
+    std::string m_script_pre_install;
+    std::string m_script_post_install;
+    std::string m_script_pre_uninstall;
+    std::string m_script_post_uninstall;
+
+    // Worker thread & synchronization
+    WorkerBridge m_worker_bridge;
+    std::thread m_worker_thread;
+
+    bool m_show_about_dialog{false};
+
+    void SyncProjectToBuffers() {
+        std::snprintf(m_buf_app_name, sizeof(m_buf_app_name), "%s", m_project.app_name.c_str());
+        std::snprintf(m_buf_app_id, sizeof(m_buf_app_id), "%s", m_project.app_id.c_str());
+        std::snprintf(m_buf_version, sizeof(m_buf_version), "%s", m_project.version.c_str());
+        std::snprintf(m_buf_author, sizeof(m_buf_author), "%s", m_project.author.c_str());
+        std::snprintf(m_buf_category, sizeof(m_buf_category), "%s", m_project.category.c_str());
+        std::snprintf(m_buf_license, sizeof(m_buf_license), "%s", m_project.license.c_str());
+        std::snprintf(m_buf_prefix, sizeof(m_buf_prefix), "%s", m_project.default_prefix.c_str());
+        std::snprintf(m_buf_desc, sizeof(m_buf_desc), "%s", m_project.description.c_str());
+
+        std::snprintf(m_buf_desktop_name, sizeof(m_buf_desktop_name), "%s", m_project.desktop.name.c_str());
+        std::snprintf(m_buf_desktop_exec, sizeof(m_buf_desktop_exec), "%s", m_project.desktop.exec_cmd.c_str());
+        std::snprintf(m_buf_desktop_icon, sizeof(m_buf_desktop_icon), "%s", m_project.desktop.icon_source.c_str());
+        std::snprintf(m_buf_desktop_cats, sizeof(m_buf_desktop_cats), "%s", m_project.desktop.categories.c_str());
+
+        m_script_pre_install = m_project.pre_install_js;
+        m_script_post_install = m_project.post_install_js;
+        m_script_pre_uninstall = m_project.pre_uninstall_js;
+        m_script_post_uninstall = m_project.post_uninstall_js;
+    }
+
+    void SyncBuffersToProject() {
+        m_project.app_name = m_buf_app_name;
+        m_project.app_id = m_buf_app_id;
+        m_project.version = m_buf_version;
+        m_project.author = m_buf_author;
+        m_project.category = m_buf_category;
+        m_project.license = m_buf_license;
+        m_project.default_prefix = m_buf_prefix;
+        m_project.description = m_buf_desc;
+
+        m_project.desktop.name = m_buf_desktop_name;
+        m_project.desktop.exec_cmd = m_buf_desktop_exec;
+        m_project.desktop.icon_source = m_buf_desktop_icon;
+        m_project.desktop.categories = m_buf_desktop_cats;
+
+        m_project.pre_install_js = m_script_pre_install;
+        m_project.post_install_js = m_script_post_install;
+        m_project.pre_uninstall_js = m_script_pre_uninstall;
+        m_project.post_uninstall_js = m_script_post_uninstall;
+    }
+
+    void FindDefaultRunnerTemplate() {
+        const char* search_paths[] = {
+            "/usr/local/share/installzone/templates/installzone-runner",
+            "build/installzone-runner",
+            "../build/installzone-runner",
+            "./installzone-runner"
+        };
+        for (const char* p : search_paths) {
+            if (access(p, R_OK) == 0) {
+                m_runner_template_path = p;
+                return;
+            }
+        }
+        m_runner_template_path = "build/installzone-runner";
+    }
+
+    void RenderUI() {
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(viewport->Pos);
+        ImGui::SetNextWindowSize(viewport->Size);
+        ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoTitleBar |
+                                        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                                        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::Begin("StudioMain", nullptr, window_flags);
+        ImGui::PopStyleVar();
+
+        RenderMenuBar();
+
+        if (ImGui::BeginTabBar("StudioTabs", ImGuiTabBarFlags_None)) {
+            if (ImGui::BeginTabItem(_("tab_general"))) {
+                RenderGeneralTab();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem(_("tab_files"))) {
+                RenderFilesTab();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem(_("tab_dependencies"))) {
+                RenderDependenciesTab();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem(_("tab_scripts"))) {
+                RenderScriptsTab();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem(_("tab_desktop"))) {
+                RenderDesktopTab();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem(_("tab_pack"))) {
+                RenderPackTab();
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
+        }
+
+        RenderAboutModal();
+        ImGui::End();
+    }
+
+    void RenderMenuBar() {
+        if (ImGui::BeginMenuBar()) {
+            if (ImGui::BeginMenu("File")) {
+                if (ImGui::MenuItem(_("btn_new"), "Ctrl+N")) {
+                    m_project.ResetToDefaults();
+                    SyncProjectToBuffers();
+                    m_current_project_file.clear();
+                }
+                if (ImGui::MenuItem(_("btn_open"), "Ctrl+O")) {
+                    if (m_project.LoadFromFile("sample_project.izproj") == StatusCode::Success) {
+                        m_current_project_file = "sample_project.izproj";
+                        SyncProjectToBuffers();
+                    }
+                }
+                if (ImGui::MenuItem(_("btn_save"), "Ctrl+S")) {
+                    SyncBuffersToProject();
+                    std::string save_path = m_current_project_file.empty() ? (m_project.app_name + ".izproj") : m_current_project_file;
+                    m_project.SaveToFile(save_path);
+                    m_current_project_file = save_path;
+                }
+                if (ImGui::MenuItem(_("btn_save_as"))) {
+                    SyncBuffersToProject();
+                    std::string save_path = m_project.app_name + ".izproj";
+                    m_project.SaveToFile(save_path);
+                    m_current_project_file = save_path;
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem(_("btn_exit"), "Alt+F4")) {
+                    exit(0);
+                }
+                ImGui::EndMenu();
+            }
+
+            if (ImGui::BeginMenu(_("lbl_help"))) {
+                if (ImGui::MenuItem(_("lbl_about"))) {
+                    m_show_about_dialog = true;
+                }
+                ImGui::EndMenu();
+            }
+
+            // Language Selector on the right side of the menu bar
+            float combo_width = 160.0f;
+            float avail = ImGui::GetContentRegionAvail().x;
+            if (avail > combo_width) {
+                ImGui::SameLine(ImGui::GetWindowWidth() - combo_width - 15.0f);
+                m_ui.RenderLanguageSelector();
+            }
+
+            ImGui::EndMenuBar();
+        }
+    }
+
+    void RenderGeneralTab() {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "%s", _("tab_general"));
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::Columns(2, "GeneralCols", false);
+        ImGui::SetColumnWidth(0, 220.0f);
+
+        ImGui::Text("%s", _("lbl_app_name"));
+        ImGui::NextColumn();
+        ImGui::InputText("##AppName", m_buf_app_name, sizeof(m_buf_app_name));
+        ImGui::NextColumn();
+
+        ImGui::Text("%s", _("lbl_app_id"));
+        ImGui::NextColumn();
+        ImGui::InputText("##AppId", m_buf_app_id, sizeof(m_buf_app_id));
+        ImGui::NextColumn();
+
+        ImGui::Text("%s", _("lbl_version"));
+        ImGui::NextColumn();
+        ImGui::InputText("##Version", m_buf_version, sizeof(m_buf_version));
+        ImGui::NextColumn();
+
+        ImGui::Text("%s", _("lbl_author"));
+        ImGui::NextColumn();
+        ImGui::InputText("##Author", m_buf_author, sizeof(m_buf_author));
+        ImGui::NextColumn();
+
+        ImGui::Text("%s", _("lbl_category"));
+        ImGui::NextColumn();
+        ImGui::InputText("##Category", m_buf_category, sizeof(m_buf_category));
+        ImGui::NextColumn();
+
+        ImGui::Text("%s", _("lbl_license"));
+        ImGui::NextColumn();
+        ImGui::InputText("##License", m_buf_license, sizeof(m_buf_license));
+        ImGui::NextColumn();
+
+        ImGui::Text("%s", _("lbl_install_prefix"));
+        ImGui::NextColumn();
+        ImGui::InputText("##Prefix", m_buf_prefix, sizeof(m_buf_prefix));
+        ImGui::NextColumn();
+
+        ImGui::Text("%s", _("lbl_description"));
+        ImGui::NextColumn();
+        ImGui::InputTextMultiline("##Desc", m_buf_desc, sizeof(m_buf_desc), ImVec2(-1, 80));
+        ImGui::NextColumn();
+
+        ImGui::Columns(1);
+    }
+
+    void RenderFilesTab() {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "%s", _("tab_files"));
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // New file entry form
+        ImGui::Text("Add File / Directory to Payload:");
+        ImGui::SetNextItemWidth(280.0f);
+        ImGui::InputTextWithHint("##SrcPath", _("lbl_source_path"), m_buf_new_src, sizeof(m_buf_new_src));
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(220.0f);
+        ImGui::InputTextWithHint("##DstPath", _("lbl_target_path"), m_buf_new_dst, sizeof(m_buf_new_dst));
+        ImGui::SameLine();
+
+        const char* perms_items[] = { "0755 (Exec/Dir)", "0644 (Data/Config)" };
+        static int perms_idx = 0;
+        ImGui::SetNextItemWidth(150.0f);
+        if (ImGui::Combo("##PermsCombo", &perms_idx, perms_items, IM_ARRAYSIZE(perms_items))) {
+            m_new_perms = (perms_idx == 0) ? 0755 : 0644;
+        }
+        ImGui::SameLine();
+
+        if (ImGui::Button(_("btn_add_file"))) {
+            if (m_buf_new_src[0] != '\0' && m_buf_new_dst[0] != '\0') {
+                FileEntry fe;
+                fe.source_path = m_buf_new_src;
+                fe.target_subpath = m_buf_new_dst;
+                fe.unix_permissions = m_new_perms;
+
+                struct stat st;
+                if (stat(fe.source_path.c_str(), &st) == 0) {
+                    fe.file_size = st.st_size;
+                } else {
+                    fe.file_size = 0;
+                }
+                m_project.files.push_back(fe);
+
+                m_buf_new_src[0] = '\0';
+                m_buf_new_dst[0] = '\0';
+            }
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        // Files Table
+        ImVec2 size = ImVec2(-1, 300);
+        if (ImGui::BeginTable("FilesTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, size)) {
+            ImGui::TableSetupColumn(_("lbl_source_path"), ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(_("lbl_target_path"), ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(_("lbl_permissions"), ImGuiTableColumnFlags_WidthFixed, 100.0f);
+            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+            ImGui::TableHeadersRow();
+
+            int to_remove = -1;
+            for (size_t i = 0; i < m_project.files.size(); ++i) {
+                const auto& f = m_project.files[i];
+                ImGui::TableNextRow();
+
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(f.source_path.c_str());
+
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextUnformatted(f.target_subpath.c_str());
+
+                ImGui::TableSetColumnIndex(2);
+                ImGui::Text("0%o", f.unix_permissions);
+
+                ImGui::TableSetColumnIndex(3);
+                ImGui::PushID(static_cast<int>(i));
+                if (ImGui::SmallButton("Delete")) {
+                    to_remove = static_cast<int>(i);
+                }
+                ImGui::PopID();
+            }
+
+            if (to_remove >= 0 && to_remove < static_cast<int>(m_project.files.size())) {
+                m_project.files.erase(m_project.files.begin() + to_remove);
+            }
+
+            ImGui::EndTable();
+        }
+
+        ImGui::Text("Total Payload Size: %.2f MB (%zu files)",
+                    static_cast<double>(m_project.CalculateTotalPayloadSize()) / (1024.0 * 1024.0),
+                    m_project.files.size());
+    }
+
+    void RenderDependenciesTab() {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "%s", _("tab_dependencies"));
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::Text("Add Required System / Apt Dependency:");
+        ImGui::SetNextItemWidth(180.0f);
+        ImGui::InputTextWithHint("##DepName", _("lbl_dep_name"), m_buf_dep_name, sizeof(m_buf_dep_name));
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(180.0f);
+        ImGui::InputTextWithHint("##DepPkg", _("lbl_dep_package"), m_buf_dep_pkg, sizeof(m_buf_dep_pkg));
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(220.0f);
+        ImGui::InputTextWithHint("##DepCmd", _("lbl_dep_check_cmd"), m_buf_dep_cmd, sizeof(m_buf_dep_cmd));
+        ImGui::SameLine();
+        ImGui::Checkbox(_("lbl_dep_required"), &m_dep_required);
+        ImGui::SameLine();
+
+        if (ImGui::Button(_("btn_add_dep"))) {
+            if (m_buf_dep_name[0] != '\0') {
+                DependencyEntry de;
+                de.name = m_buf_dep_name;
+                de.package_name = m_buf_dep_pkg;
+                de.check_command = m_buf_dep_cmd;
+                de.is_required = m_dep_required;
+                m_project.dependencies.push_back(de);
+
+                m_buf_dep_name[0] = '\0';
+                m_buf_dep_pkg[0] = '\0';
+                m_buf_dep_cmd[0] = '\0';
+            }
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        // Dependencies Table
+        ImVec2 size = ImVec2(-1, 300);
+        if (ImGui::BeginTable("DepsTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, size)) {
+            ImGui::TableSetupColumn(_("lbl_dep_name"), ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(_("lbl_dep_package"), ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(_("lbl_dep_check_cmd"), ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 160.0f);
+            ImGui::TableHeadersRow();
+
+            int to_remove = -1;
+            for (size_t i = 0; i < m_project.dependencies.size(); ++i) {
+                const auto& d = m_project.dependencies[i];
+                ImGui::TableNextRow();
+
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(d.name.c_str());
+
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextUnformatted(d.package_name.c_str());
+
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextUnformatted(d.check_command.c_str());
+
+                ImGui::TableSetColumnIndex(3);
+                bool ok = System::IsDependencySatisfied(d);
+                if (ok) {
+                    ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "Installed");
+                } else {
+                    ImGui::TextColored(ImVec4(0.9f, 0.4f, 0.3f, 1.0f), "Missing");
+                }
+
+                ImGui::TableSetColumnIndex(4);
+                ImGui::PushID(static_cast<int>(i));
+                if (ImGui::SmallButton("Test")) {
+                    bool res = System::IsDependencySatisfied(d);
+                    std::cout << "Dependency test " << d.name << ": " << (res ? "OK" : "Missing") << "\n";
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Delete")) {
+                    to_remove = static_cast<int>(i);
+                }
+                ImGui::PopID();
+            }
+
+            if (to_remove >= 0 && to_remove < static_cast<int>(m_project.dependencies.size())) {
+                m_project.dependencies.erase(m_project.dependencies.begin() + to_remove);
+            }
+
+            ImGui::EndTable();
+        }
+    }
+
+    void RenderScriptsTab() {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "%s", _("tab_scripts"));
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        if (ImGui::BeginTabBar("ScriptSubTabs")) {
+            if (ImGui::BeginTabItem(_("lbl_pre_install_js"))) {
+                ImGui::Text("Executes before payload extraction (e.g. system check, stopping services):");
+                static char pre_buf[65536] = {0};
+                if (pre_buf[0] == '\0') std::snprintf(pre_buf, sizeof(pre_buf), "%s", m_script_pre_install.c_str());
+                if (ImGui::InputTextMultiline("##PreJs", pre_buf, sizeof(pre_buf), ImVec2(-1, 260))) {
+                    m_script_pre_install = pre_buf;
+                }
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem(_("lbl_post_install_js"))) {
+                ImGui::Text("Executes after payload extraction (e.g. creating ~/.config, configuring navi, symlinks):");
+
+                // Quick snippet buttons!
+                if (ImGui::Button(_("lbl_sample_mkdir"))) {
+                    m_script_post_install += "\n// Create ~/.config directory\nvar myConfig = iz.config_dir + '/' + iz.app_name.toLowerCase();\niz.mkdir(myConfig);\niz.write_file(myConfig + '/config.json', '{\"configured\": true}\\n');\n";
+                }
+                ImGui::SameLine();
+                if (ImGui::Button(_("lbl_sample_navi"))) {
+                    m_script_post_install += "\n// Configure Navi cheatsheet\nvar naviCheats = iz.home_dir + '/.config/navi/cheats';\niz.mkdir(naviCheats);\niz.write_file(naviCheats + '/' + iz.app_name.toLowerCase() + '.cheat', '% ' + iz.app_name + '\\n# Run application\\n' + iz.app_name.toLowerCase() + ' --help\\n');\niz.log('Configured navi cheatsheet in ' + naviCheats);\n";
+                }
+
+                static char post_buf[65536] = {0};
+                std::snprintf(post_buf, sizeof(post_buf), "%s", m_script_post_install.c_str());
+                if (ImGui::InputTextMultiline("##PostJs", post_buf, sizeof(post_buf), ImVec2(-1, 260))) {
+                    m_script_post_install = post_buf;
+                }
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem(_("lbl_pre_uninstall_js"))) {
+                static char pre_un_buf[65536] = {0};
+                std::snprintf(pre_un_buf, sizeof(pre_un_buf), "%s", m_script_pre_uninstall.c_str());
+                if (ImGui::InputTextMultiline("##PreUnJs", pre_un_buf, sizeof(pre_un_buf), ImVec2(-1, 260))) {
+                    m_script_pre_uninstall = pre_un_buf;
+                }
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem(_("lbl_post_uninstall_js"))) {
+                static char post_un_buf[65536] = {0};
+                std::snprintf(post_un_buf, sizeof(post_un_buf), "%s", m_script_post_uninstall.c_str());
+                if (ImGui::InputTextMultiline("##PostUnJs", post_un_buf, sizeof(post_un_buf), ImVec2(-1, 260))) {
+                    m_script_post_uninstall = post_un_buf;
+                }
+                ImGui::EndTabItem();
+            }
+
+            ImGui::EndTabBar();
+        }
+
+        ImGui::Spacing();
+        if (ImGui::Button(_("btn_test_script"))) {
+            JsEngine engine;
+            JsContextConfig cfg;
+            cfg.app_name = m_buf_app_name;
+            cfg.version = m_buf_version;
+            cfg.install_dir = "/tmp/installzone_sandbox";
+            cfg.log_callback = [this](const std::string& msg) {
+                m_worker_bridge.AppendLog(msg);
+            };
+            engine.Initialize(cfg);
+            std::string err;
+            engine.Execute(m_script_post_install, &err);
+        }
+
+        // Script output console
+        ImGui::Spacing();
+        ImGui::Text("Script Sandbox Output:");
+        std::vector<std::string> logs;
+        m_worker_bridge.CopyLogs(logs);
+        if (ImGui::BeginChild("ScriptLogBox", ImVec2(-1, 120), true)) {
+            for (const auto& line : logs) {
+                ImGui::TextUnformatted(line.c_str());
+            }
+            if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
+                ImGui::SetScrollHereY(1.0f);
+            }
+        }
+        ImGui::EndChild();
+    }
+
+    void RenderDesktopTab() {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "%s", _("tab_desktop"));
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::Checkbox("Generate XDG Desktop Launcher Entry (.desktop)", &m_project.desktop.create_desktop_entry);
+        ImGui::Spacing();
+
+        if (m_project.desktop.create_desktop_entry) {
+            ImGui::Columns(2, "DesktopCols", false);
+            ImGui::SetColumnWidth(0, 220.0f);
+
+            ImGui::Text("%s", _("lbl_desktop_name"));
+            ImGui::NextColumn();
+            ImGui::InputText("##DesktopName", m_buf_desktop_name, sizeof(m_buf_desktop_name));
+            ImGui::NextColumn();
+
+            ImGui::Text("%s", _("lbl_desktop_exec"));
+            ImGui::NextColumn();
+            ImGui::InputText("##DesktopExec", m_buf_desktop_exec, sizeof(m_buf_desktop_exec));
+            ImGui::NextColumn();
+
+            ImGui::Text("%s", _("lbl_desktop_icon"));
+            ImGui::NextColumn();
+            ImGui::InputText("##DesktopIcon", m_buf_desktop_icon, sizeof(m_buf_desktop_icon));
+            ImGui::NextColumn();
+
+            ImGui::Text("%s", _("lbl_desktop_categories"));
+            ImGui::NextColumn();
+            ImGui::InputText("##DesktopCats", m_buf_desktop_cats, sizeof(m_buf_desktop_cats));
+            ImGui::NextColumn();
+
+            ImGui::Text("%s", _("lbl_desktop_terminal"));
+            ImGui::NextColumn();
+            ImGui::Checkbox("##DesktopTerminal", &m_project.desktop.terminal);
+            ImGui::NextColumn();
+
+            ImGui::Columns(1);
+        }
+    }
+
+    void RenderPackTab() {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "%s", _("tab_pack"));
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        static char template_buf[kMaxPathLen] = {0};
+        if (template_buf[0] == '\0') std::snprintf(template_buf, sizeof(template_buf), "%s", m_runner_template_path.c_str());
+        ImGui::Text("Runner Base Executable Path:");
+        if (ImGui::InputText("##RunnerTemplate", template_buf, sizeof(template_buf))) {
+            m_runner_template_path = template_buf;
+        }
+
+        static char output_buf[kMaxPathLen] = {0};
+        if (output_buf[0] == '\0') std::snprintf(output_buf, sizeof(output_buf), "%s", m_output_installer_path.c_str());
+        ImGui::Text("%s", _("lbl_select_output"));
+        if (ImGui::InputText("##OutputInstaller", output_buf, sizeof(output_buf))) {
+            m_output_installer_path = output_buf;
+        }
+
+        ImGui::Spacing();
+
+        bool is_packing = m_worker_bridge.is_running.load();
+        if (is_packing) {
+            ImGui::BeginDisabled();
+        }
+
+        if (ImGui::Button(_("btn_pack_installer"), ImVec2(240, 42))) {
+            SyncBuffersToProject();
+            StartPacking();
+        }
+
+        if (is_packing) {
+            ImGui::EndDisabled();
+        }
+
+        ImGui::Spacing();
+        float prog = m_worker_bridge.progress.load();
+        ImGui::ProgressBar(prog, ImVec2(-1, 24));
+        ImGui::Text("%s %s", _("lbl_status"), m_worker_bridge.GetCurrentOperation().c_str());
+
+        ImGui::Spacing();
+        ImGui::Text("Packing Log:");
+        std::vector<std::string> logs;
+        m_worker_bridge.CopyLogs(logs);
+        if (ImGui::BeginChild("PackLogBox", ImVec2(-1, 220), true)) {
+            for (const auto& l : logs) {
+                ImGui::TextUnformatted(l.c_str());
+            }
+            if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
+                ImGui::SetScrollHereY(1.0f);
+            }
+        }
+        ImGui::EndChild();
+
+        if (m_worker_bridge.is_finished.load()) {
+            if (m_worker_bridge.success.load()) {
+                ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "Standalone Installer Successfully Generated!");
+                ImGui::SameLine();
+                if (ImGui::Button("Run Installer Now")) {
+                    std::string run_cmd = "./" + m_output_installer_path + " &";
+                    system(run_cmd.c_str());
+                }
+            } else {
+                ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "Packing failed: %s", m_worker_bridge.GetErrorMessage().c_str());
+            }
+        }
+    }
+
+    void StartPacking() {
+        if (m_worker_thread.joinable()) {
+            m_worker_thread.join();
+        }
+        m_worker_bridge.Reset();
+        m_worker_bridge.is_running.store(true);
+        m_worker_bridge.SetOperation(_("lbl_packing"));
+
+        // Ensure output parent directory exists
+        size_t slash = m_output_installer_path.find_last_of('/');
+        if (slash != std::string::npos) {
+            std::string parent = m_output_installer_path.substr(0, slash);
+            system(("mkdir -p \"" + parent + "\"").c_str());
+        }
+
+        // Launch background logic thread (completely separate from UI thread)
+        m_worker_thread = std::thread([this]() {
+            StatusCode res = Archive::PackStandaloneInstaller(
+                m_runner_template_path,
+                m_project,
+                m_output_installer_path,
+                [this](float p, const std::string& item) {
+                    m_worker_bridge.SetProgress(p);
+                    m_worker_bridge.SetOperation(item);
+                },
+                [this](const std::string& msg) {
+                    m_worker_bridge.AppendLog(msg);
+                }
+            );
+
+            if (res == StatusCode::Success) {
+                m_worker_bridge.Finish(true);
+            } else {
+                m_worker_bridge.Finish(false, StatusCodeToString(res));
+            }
+        });
+    }
+
+    void RenderAboutModal() {
+        if (m_show_about_dialog) {
+            ImGui::OpenPopup(_("lbl_about"));
+        }
+
+        if (ImGui::BeginPopupModal(_("lbl_about"), &m_show_about_dialog, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "InstallZone Studio");
+            ImGui::Text("Version 1.0.0 (KDE Plasma Edition)");
+            ImGui::Separator();
+            ImGui::TextUnformatted(_("lbl_about_desc"));
+            ImGui::Spacing();
+            if (ImGui::Button("Close", ImVec2(120, 0))) {
+                m_show_about_dialog = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+};
+
+} // namespace iz
+
+int main(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+    iz::StudioApp app;
+    app.Run();
+    return 0;
+}

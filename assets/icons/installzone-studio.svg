@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="grad_bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e2638"/>
+      <stop offset="100%" stop-color="#0f1420"/>
+    </linearGradient>
+    <linearGradient id="grad_accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3daee9"/>
+      <stop offset="100%" stop-color="#1d75b3"/>
+    </linearGradient>
+    <linearGradient id="grad_box" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#cfd8dc" stop-opacity="0.95"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <!-- Background Base -->
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#grad_bg)" filter="url(#shadow)"/>
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="none" stroke="#3daee9" stroke-width="2.5" stroke-opacity="0.4"/>
+
+  <!-- Isometric Package Box -->
+  <g transform="translate(64, 52)">
+    <!-- Top Face -->
+    <polygon points="0,-24 32,-8 0,8 -32,-8" fill="#55bbee"/>
+    <!-- Left Face -->
+    <polygon points="-32,-8 0,8 0,44 -32,28" fill="#2480c0"/>
+    <!-- Right Face -->
+    <polygon points="0,8 32,-8 32,28 0,44" fill="#1b6395"/>
+
+    <!-- Seam Tape / Banding -->
+    <polygon points="-12,-2 0,4 0,44 -12,38" fill="#ffd166" opacity="0.9"/>
+    <polygon points="0,4 12,-2 12,38 0,44" fill="#f7b731" opacity="0.9"/>
+    <polygon points="0,-24 6,-21 -6,-15 -12,-18" fill="#ffe082" opacity="0.8"/>
+  </g>
+
+  <!-- Downward Arrow (Install Symbol) -->
+  <g transform="translate(64, 40)" filter="url(#shadow)">
+    <path d="M -8, -18 L 8, -18 L 8, -4 L 18, -4 L 0, 16 L -18, -4 L -8, -4 Z" fill="#ffffff"/>
+    <path d="M -6, -16 L 6, -16 L 6, -2 L 14, -2 L 0, 12 L -14, -2 L -6, -2 Z" fill="#3daee9"/>
+  </g>
+
+  <!-- Gear Badge (Engine / Scripting Symbol) -->
+  <circle cx="94" cy="94" r="16" fill="#1e2638" stroke="#3daee9" stroke-width="2.5" filter="url(#shadow)"/>
+  <path d="M 94,84 L 96,87 L 99,86 L 100,89 L 103,89 L 103,92 L 105,94 L 103,96 L 103,99 L 100,99 L 99,102 L 96,101 L 94,104 L 92,101 L 89,102 L 88,99 L 85,99 L 85,96 L 83,94 L 85,92 L 85,89 L 88,89 L 89,86 L 92,87 Z" fill="#3daee9"/>
+  <circle cx="94" cy="94" r="4.5" fill="#1e2638"/>
+</svg>

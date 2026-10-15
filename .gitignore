@@ -1,0 +1,22 @@
+# Build outputs
+build/
+dist/
+bin/
+lib/
+*.run
+*.bin
+*.o
+*.a
+*.so
+
+# IDE and temporary files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Test temporary artifacts
+/tmp/test_*
+examples/sample_files/
+sample_project.izproj

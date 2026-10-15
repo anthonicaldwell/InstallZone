@@ -1,0 +1,48 @@
+#pragma once
+
+#include "jpl_defs.h"
+#include "iz_project.h"
+#include <string>
+#include <vector>
+#include <functional>
+
+namespace iz {
+
+using LogCallback = std::function<void(const std::string& message)>;
+
+class System {
+public:
+    static bool IsRoot();
+    static bool PathRequiresElevation(const std::string& path);
+    static StatusCode ElevateProcess(int argc, char** argv);
+
+    // Dependency verification
+    static bool IsDependencySatisfied(const DependencyEntry& dep);
+    static StatusCode InstallPackageApt(const std::string& package_name, std::string* output = nullptr);
+
+    // Desktop integration
+    static StatusCode InstallDesktopEntry(
+        const Project& project,
+        const std::string& install_dir,
+        bool system_wide
+    );
+
+    static StatusCode RemoveDesktopEntry(
+        const std::string& app_id,
+        bool system_wide
+    );
+
+    // Uninstaller generation
+    static StatusCode GenerateUninstaller(
+        const std::string& install_dir,
+        const Project& project,
+        const std::vector<std::string>& installed_files
+    );
+
+    static StatusCode PerformUninstall(
+        const std::string& uninstall_json_path,
+        LogCallback log_cb = nullptr
+    );
+};
+
+} // namespace iz
