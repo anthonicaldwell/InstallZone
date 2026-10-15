@@ -31,6 +31,13 @@
 
 ![InstallZone Runner](assets/screenshots/installzone-runner.png)
 
+<br/>
+
+### Maintenance Mode (Reinstall / Uninstall)
+*Reusing the installer when the application is already installed presents classic Windows-style maintenance options to Reinstall / Update or cleanly Uninstall (while safely preserving all system APT dependencies).*
+
+![InstallZone Maintenance Mode](assets/screenshots/installzone-modify.png)
+
 </div>
 
 ---
@@ -89,6 +96,10 @@ It utilizes **OpenGL 2.1** and **Dear ImGui** for maximum graphics hardware comp
 - **Single-Prompt Administrator Elevation**:
   - Automatically detects when system directories (`/usr/bin`, `/opt`) or missing APT dependencies require root permissions.
   - Prompts once graphically via KDE `kdialog --password` or `zenity`, batch-installs dependencies via `apt-get`, and safely extracts payload files.
+- **Intelligent Existing Installation Detection & Maintenance Mode**:
+  - Automatically detects if the application is already installed on the system.
+  - Emulates classic Windows installers (InstallShield/Inno Setup) by presenting **Reinstall / Update** and **Uninstall** radio choices.
+  - Safely preserves all system dependencies and APT packages during uninstallation.
 - **Uninstaller Generation**: Automatically creates uninstaller manifests and `/usr/bin/<app>-uninstall.sh` for clean one-click uninstalls.
 
 ### Engineering & Safety Standards

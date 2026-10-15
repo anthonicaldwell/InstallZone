@@ -950,8 +950,19 @@ private:
                 ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "Standalone Installer Successfully Generated!");
                 ImGui::SameLine();
                 if (ImGui::Button("Run Installer Now")) {
-                    std::string run_cmd = "./" + m_output_installer_path + " &";
-                    IzSystem(run_cmd);
+                    std::string target_path = m_output_installer_path;
+                    if (!target_path.empty()) {
+                        if (target_path.rfind("/", 0) != 0) {
+                            char cwd[kMaxPathLen] = {0};
+                            if (getcwd(cwd, sizeof(cwd))) {
+                                target_path = std::string(cwd) + "/" + target_path;
+                            }
+                        }
+                        chmod(target_path.c_str(), 0755);
+                        m_worker_bridge.AppendLog("Launching installer: " + target_path);
+                        std::string run_cmd = "\"" + target_path + "\" &";
+                        IzSystem(run_cmd);
+                    }
                 }
             } else {
                 ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "Packing failed: %s", m_worker_bridge.GetErrorMessage().c_str());

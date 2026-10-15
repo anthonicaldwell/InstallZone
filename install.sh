@@ -28,21 +28,25 @@ cmake --build build -j"$(nproc)"
 
 # Determine installation destination (target /usr/bin and /usr/share)
 if [ "$(id -u)" -ne 0 ]; then
-    echo "[3/5] Requesting sudo elevation to install into /usr/bin and /usr/share..."
-    if [ ! -t 0 ] && [ -n "$DISPLAY$WAYLAND_DISPLAY" ]; then
-        PASS=""
-        if command -v kdialog >/dev/null 2>&1; then
-            PASS=$(kdialog --password "InstallZone requires administrator privileges to install:")
-        elif command -v zenity >/dev/null 2>&1; then
-            PASS=$(zenity --password --title="InstallZone Authentication")
+    if sudo -n true 2>/dev/null; then
+        SUDO_CMD="sudo"
+    else
+        echo "[3/5] Requesting sudo elevation to install into /usr/bin and /usr/share..."
+        if [ -n "$DISPLAY$WAYLAND_DISPLAY" ] && (command -v kdialog >/dev/null 2>&1 || command -v zenity >/dev/null 2>&1); then
+            PASS=""
+            if command -v kdialog >/dev/null 2>&1; then
+                PASS=$(kdialog --password "InstallZone requires administrator privileges to install:")
+            elif command -v zenity >/dev/null 2>&1; then
+                PASS=$(zenity --password --title="InstallZone Authentication")
+            fi
+            if [ -n "$PASS" ]; then
+                echo "$PASS" | sudo -S -v 2>/dev/null
+            fi
+        elif command -v sudo >/dev/null 2>&1; then
+            sudo -v
         fi
-        if [ -n "$PASS" ]; then
-            echo "$PASS" | sudo -S -v 2>/dev/null
-        fi
-    elif command -v sudo >/dev/null 2>&1; then
-        sudo -v
+        SUDO_CMD="sudo"
     fi
-    SUDO_CMD="sudo"
 else
     SUDO_CMD=""
 fi

@@ -13,7 +13,9 @@ echo "=================================================================="
 
 # Pre-authenticate sudo once so uninstall.sh and install.sh run seamlessly
 if [ "$(id -u)" -ne 0 ]; then
-    if [ ! -t 0 ] && [ -n "$DISPLAY$WAYLAND_DISPLAY" ]; then
+    if sudo -n true 2>/dev/null; then
+        : # already cached
+    elif [ -n "$DISPLAY$WAYLAND_DISPLAY" ] && (command -v kdialog >/dev/null 2>&1 || command -v zenity >/dev/null 2>&1); then
         PASS=""
         if command -v kdialog >/dev/null 2>&1; then
             PASS=$(kdialog --password "InstallZone requires administrator privileges to reinstall:")
