@@ -14,7 +14,9 @@
 #include <vector>
 #include <thread>
 #include <cstdlib>
+#include <cmath>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <sys/statvfs.h>
 
 namespace iz {
@@ -36,6 +38,13 @@ public:
         DetectPayload();
     }
 
+    ~RunnerApp() {
+        if (!m_temp_assets_dir.empty()) {
+            std::string rm_cmd = "rm -rf \"" + m_temp_assets_dir + "\" 2>/dev/null";
+            IzSystem(rm_cmd);
+        }
+    }
+
     void Run() {
         I18n::Initialize();
 
@@ -46,13 +55,28 @@ public:
 
         // Initialize and play background chiptune (default 50% volume)
         AudioManager::Initialize();
-        AudioManager::StartDefaultChiptune();
+
+        std::string chiptune_override = "";
+        if (!m_temp_assets_dir.empty()) {
+            std::string candidate = m_temp_assets_dir + "/chiptune.wav";
+            if (access(candidate.c_str(), R_OK) == 0) {
+                chiptune_override = candidate;
+            }
+        }
+        AudioManager::StartDefaultChiptune(chiptune_override);
 
         std::string win_title = std::string(_("app_title_runner")) + " - " + m_project.app_name;
-        if (m_ui.Initialize(win_title.c_str(), 740, 640) != StatusCode::Success) {
+        if (m_ui.Initialize(win_title.c_str(), 760, 780) != StatusCode::Success) {
             std::cerr << "Failed to initialize Runner UI.\n";
             AudioManager::Shutdown();
             return;
+        }
+
+        if (!m_temp_assets_dir.empty()) {
+            std::string banner_override = m_temp_assets_dir + "/banner.jpg";
+            if (access(banner_override.c_str(), R_OK) == 0) {
+                m_ui.LoadBannerTexture(banner_override.c_str());
+            }
         }
 
         while (m_ui.ProcessEvents()) {
@@ -75,6 +99,7 @@ private:
     Project m_project;
 
     std::string m_exe_path;
+    std::string m_temp_assets_dir;
     bool m_has_embedded_payload{false};
     bool m_is_uninstall_mode{false};
     std::string m_uninstall_manifest_path;
@@ -108,6 +133,20 @@ private:
         if (Archive::HasEmbeddedPayload(m_exe_path)) {
             m_has_embedded_payload = true;
             Archive::ReadEmbeddedManifest(m_exe_path, m_project);
+
+            // Extract internal assets (banner, chiptune, icon) to per-process temp directory
+            m_temp_assets_dir = "/tmp/iz_runner_" + std::to_string(getpid());
+            Archive::ExtractInternalAssets(m_exe_path, m_temp_assets_dir);
+
+            // Check if internal app icon was extracted
+            const char* icon_exts[] = { ".png", ".svg", ".ico", ".xpm" };
+            for (const char* ext : icon_exts) {
+                std::string icon_candidate = m_temp_assets_dir + "/app_icon" + std::string(ext);
+                if (access(icon_candidate.c_str(), R_OK) == 0) {
+                    m_project.desktop.icon_source = icon_candidate;
+                    break;
+                }
+            }
         } else {
             // Check if project manifest exists in current working directory
             if (access("manifest.json", R_OK) == 0) {
@@ -149,10 +188,10 @@ private:
             AudioManager::SetMuted(!music_enabled);
         }
         ImGui::SameLine();
-        float vol = AudioManager::GetVolume();
+        int vol_pct = static_cast<int>(std::round(AudioManager::GetVolume() * 100.0f));
         ImGui::SetNextItemWidth(90.0f);
-        if (ImGui::SliderFloat("##MusicVol", &vol, 0.0f, 1.0f, "Vol: %.0f%%")) {
-            AudioManager::SetVolume(vol);
+        if (ImGui::SliderInt("##MusicVol", &vol_pct, 0, 100, "Vol: %d%%")) {
+            AudioManager::SetVolume(static_cast<float>(vol_pct) / 100.0f);
         }
         ImGui::SameLine(ImGui::GetWindowWidth() - combo_width - 15.0f);
         m_ui.RenderLanguageSelector();
@@ -160,8 +199,8 @@ private:
         ImGui::Separator();
         ImGui::Spacing();
 
-        // Top banner with early 2000's GPU box art retro aesthetic
-        m_ui.RenderBanner(0, 110.0f);
+        // Top banner with early 2000's GPU box art retro aesthetic (aspect ratio preserved)
+        m_ui.RenderBanner(0, 200.0f, true);
         ImGui::Spacing();
 
         switch (m_current_page) {
@@ -235,10 +274,7 @@ private:
         ImGui::Spacing();
         bool needs_elevation = System::PathRequiresElevation(m_buf_destination);
         if (needs_elevation) {
-            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "%s", _("lbl_elevation_needed"));
-            if (ImGui::Button(_("btn_elevate"))) {
-                System::ElevateProcess(m_argc, m_argv);
-            }
+            ImGui::TextDisabled("Note: Destination path requires administrator privileges (will prompt on Install).");
         }
 
         ImGui::Spacing();
@@ -260,25 +296,15 @@ private:
         ImGui::TextColored(ImVec4(0.9f, 0.95f, 1.0f, 1.0f), "%s", _("lbl_deps_checking"));
         ImGui::Spacing();
 
-        bool all_satisfied = true;
         if (m_project.dependencies.empty()) {
             ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "No external dependencies required.");
         } else {
             for (const auto& dep : m_project.dependencies) {
                 bool ok = System::IsDependencySatisfied(dep);
-                if (!ok && dep.is_required) all_satisfied = false;
-
                 if (ok) {
-                    ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "[OK] %s (%s)", dep.name.c_str(), dep.package_name.c_str());
+                    ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "[OK] %s (%s) - Installed", dep.name.c_str(), dep.package_name.c_str());
                 } else {
-                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "[MISSING] %s (%s)%s",
-                                       dep.name.c_str(), dep.package_name.c_str(),
-                                       dep.is_required ? " - Required" : " - Optional");
-                    ImGui::SameLine();
-                    std::string btn_id = "Install##" + dep.name;
-                    if (ImGui::SmallButton(btn_id.c_str())) {
-                        System::InstallPackageApt(dep.package_name);
-                    }
+                    ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "[PENDING] %s (%s) - Will be installed via apt", dep.name.c_str(), dep.package_name.c_str());
                 }
             }
         }
@@ -292,15 +318,9 @@ private:
         }
         ImGui::SameLine(ImGui::GetWindowWidth() - 140.0f);
 
-        if (!all_satisfied) {
-            ImGui::BeginDisabled();
-        }
-        if (ImGui::Button(_("btn_install"), ImVec2(120, 32))) {
+        if (ImGui::Button("Install Now", ImVec2(120, 32))) {
             m_current_page = WizardPage::Installing;
             StartInstallation();
-        }
-        if (!all_satisfied) {
-            ImGui::EndDisabled();
         }
     }
 
@@ -374,7 +394,52 @@ private:
         m_worker_bridge.SetOperation("Initializing installation...");
 
         m_worker_thread = std::thread([this]() {
-            // 1. Run Pre-Install JS Hook
+            // Step 0: Check missing dependencies & elevation requirement
+            std::vector<std::string> missing_pkgs;
+            for (const auto& dep : m_project.dependencies) {
+                if (!System::IsDependencySatisfied(dep) && !dep.package_name.empty()) {
+                    missing_pkgs.push_back(dep.package_name);
+                }
+            }
+
+            bool is_system_install = (m_project.default_prefix.rfind("/usr", 0) == 0 ||
+                                      m_project.default_prefix.rfind("/opt", 0) == 0 ||
+                                      System::PathRequiresElevation(m_project.default_prefix));
+
+            bool needs_sudo = (!System::IsRoot()) && (is_system_install || !missing_pkgs.empty() || m_create_desktop_entry);
+
+            std::string sudo_pass;
+            if (needs_sudo) {
+                m_worker_bridge.SetOperation("Requesting administrator privileges...");
+                m_worker_bridge.AppendLog("Prompting for administrator elevation (sudo)...");
+
+                std::string reason = "install " + m_project.app_name;
+                if (!missing_pkgs.empty()) reason += " and missing system dependencies";
+
+                if (!System::EnsureSudo(reason, &sudo_pass)) {
+                    m_worker_bridge.Finish(false, "Administrator authentication was cancelled or failed.");
+                    return;
+                }
+                m_worker_bridge.AppendLog("Administrator privileges confirmed.");
+            }
+
+            // Step 1: Install any missing system dependencies via Apt
+            if (!missing_pkgs.empty()) {
+                m_worker_bridge.SetOperation("Installing system dependencies...");
+                for (const auto& pkg : missing_pkgs) {
+                    m_worker_bridge.AppendLog("Installing dependency via apt: " + pkg + "...");
+                    std::string apt_cmd = "apt-get install -y " + pkg;
+                    std::string apt_out;
+                    StatusCode ares = System::RunElevatedCommand(apt_cmd, sudo_pass, &apt_out);
+                    if (ares != StatusCode::Success) {
+                        m_worker_bridge.AppendLog("Warning: apt-get install " + pkg + " failed: " + apt_out);
+                    } else {
+                        m_worker_bridge.AppendLog("Successfully installed " + pkg + ".");
+                    }
+                }
+            }
+
+            // Step 2: Run Pre-Install JS Hook
             if (!m_project.pre_install_js.empty()) {
                 m_worker_bridge.SetOperation("Running Pre-Install Script...");
                 m_worker_bridge.AppendLog("Executing Pre-Install JavaScript hook...");
@@ -396,11 +461,22 @@ private:
                 }
             }
 
-            // 2. Extract payload files
-            m_worker_bridge.SetOperation("Extracting payload files...");
+            // Step 3: Extract payload files
+            m_worker_bridge.SetOperation("Extracting application files...");
+
+            // If system install as non-root, extract to temporary staging folder and copy with sudo
+            std::string stage_dir = "";
+            std::string extract_target = m_project.default_prefix;
+            bool use_staging = (is_system_install && !System::IsRoot());
+
+            if (use_staging) {
+                stage_dir = "/tmp/iz_stage_" + std::to_string(getpid());
+                extract_target = stage_dir;
+            }
+
             StatusCode res = Archive::ExtractEmbeddedPayload(
                 m_exe_path,
-                m_project.default_prefix,
+                extract_target,
                 m_installed_files,
                 [this](float p, const std::string& item) {
                     m_worker_bridge.SetProgress(p * 0.7f);
@@ -416,14 +492,46 @@ private:
                 return;
             }
 
-            // 3. Desktop Entry Integration
+            if (use_staging) {
+                m_worker_bridge.SetOperation("Installing files to destination...");
+                m_worker_bridge.AppendLog("Copying files to " + m_project.default_prefix + " with administrator privileges...");
+
+                System::RunElevatedCommand("mkdir -p \"" + m_project.default_prefix + "\"", sudo_pass);
+
+                bool prefix_is_bin = (m_project.default_prefix.length() >= 4 &&
+                                      m_project.default_prefix.rfind("/bin") == m_project.default_prefix.length() - 4);
+                std::string stage_bin = stage_dir + "/bin";
+                struct stat st_bin;
+                bool stage_has_bin = (stat(stage_bin.c_str(), &st_bin) == 0 && S_ISDIR(st_bin.st_mode));
+
+                if (prefix_is_bin && stage_has_bin) {
+                    // Copy files from stage_dir/bin/* directly into prefix (e.g. /usr/bin)
+                    System::RunElevatedCommand("cp -a \"" + stage_bin + "/\". \"" + m_project.default_prefix + "/\"", sudo_pass);
+                    System::RunElevatedCommand("rm -rf \"" + stage_bin + "\"", sudo_pass);
+                    System::RunElevatedCommand("cp -a \"" + stage_dir + "/\". \"" + m_project.default_prefix + "/\"", sudo_pass);
+                } else {
+                    System::RunElevatedCommand("cp -a \"" + stage_dir + "/\". \"" + m_project.default_prefix + "/\"", sudo_pass);
+                }
+
+                // Update m_installed_files paths to reflect final prefix
+                for (auto& f : m_installed_files) {
+                    if (prefix_is_bin && stage_has_bin && f.rfind(stage_bin, 0) == 0) {
+                        f = m_project.default_prefix + f.substr(stage_bin.length());
+                    } else if (f.rfind(stage_dir, 0) == 0) {
+                        f = m_project.default_prefix + f.substr(stage_dir.length());
+                    }
+                }
+                IzSystem("rm -rf \"" + stage_dir + "\" 2>/dev/null");
+            }
+
+            // Step 4: Desktop Entry Integration
             if (m_create_desktop_entry) {
                 m_worker_bridge.SetOperation("Creating desktop launcher and menu items...");
                 m_worker_bridge.AppendLog("Creating FreeDesktop XDG shortcut...");
-                System::InstallDesktopEntry(m_project, m_project.default_prefix, System::IsRoot());
+                System::InstallDesktopEntry(m_project, m_project.default_prefix, is_system_install, sudo_pass);
             }
 
-            // 4. Run Post-Install JS Hook (e.g. creating ~/.config, configuring navi)
+            // Step 5: Run Post-Install JS Hook
             if (!m_project.post_install_js.empty()) {
                 m_worker_bridge.SetOperation("Running Post-Install Script...");
                 m_worker_bridge.AppendLog("Executing Post-Install JavaScript hook...");
@@ -445,9 +553,9 @@ private:
                 }
             }
 
-            // 5. Generate Uninstaller Manifest & Script
+            // Step 6: Generate Uninstaller Records
             m_worker_bridge.SetOperation("Generating uninstaller records...");
-            System::GenerateUninstaller(m_project.default_prefix, m_project, m_installed_files);
+            System::GenerateUninstaller(m_project.default_prefix, m_project, m_installed_files, sudo_pass);
 
             m_worker_bridge.SetProgress(1.0f);
             m_worker_bridge.SetOperation("Done");

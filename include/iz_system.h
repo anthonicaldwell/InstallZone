@@ -16,6 +16,9 @@ public:
     static bool PathRequiresElevation(const std::string& path);
     static StatusCode ElevateProcess(int argc, char** argv);
 
+    static bool EnsureSudo(const std::string& reason, std::string* out_password = nullptr);
+    static StatusCode RunElevatedCommand(const std::string& cmd, const std::string& sudo_password = "", std::string* output = nullptr);
+
     // Dependency verification
     static bool IsDependencySatisfied(const DependencyEntry& dep);
     static StatusCode InstallPackageApt(const std::string& package_name, std::string* output = nullptr);
@@ -24,7 +27,8 @@ public:
     static StatusCode InstallDesktopEntry(
         const Project& project,
         const std::string& install_dir,
-        bool system_wide
+        bool system_wide,
+        const std::string& sudo_password = ""
     );
 
     static StatusCode RemoveDesktopEntry(
@@ -36,7 +40,8 @@ public:
     static StatusCode GenerateUninstaller(
         const std::string& install_dir,
         const Project& project,
-        const std::vector<std::string>& installed_files
+        const std::vector<std::string>& installed_files,
+        const std::string& sudo_password = ""
     );
 
     static StatusCode PerformUninstall(

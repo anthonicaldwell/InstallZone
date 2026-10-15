@@ -6,6 +6,10 @@
 #include <algorithm>
 #include <cctype>
 #include <unordered_map>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <climits>
+#include <cstdlib>
 
 namespace iz {
 
@@ -22,6 +26,102 @@ static std::string Trim(const std::string& str) {
     if (first == std::string::npos) return "";
     size_t last = str.find_last_not_of(" \t\r\n");
     return str.substr(first, (last - first + 1));
+}
+
+static std::string FindTargetBinary(const std::string& cmake_dir, const std::string& target, uint64_t* out_size) {
+    std::vector<std::string> candidates = {
+        cmake_dir + "/" + target,
+        cmake_dir + "/build/" + target,
+        cmake_dir + "/bin/" + target,
+        cmake_dir + "/build/bin/" + target,
+        cmake_dir + "/build/Release/" + target,
+        cmake_dir + "/build/Debug/" + target,
+        cmake_dir + "/cmake-build-release/" + target,
+        cmake_dir + "/cmake-build-debug/" + target
+    };
+    for (const auto& path : candidates) {
+        struct stat st;
+        if (stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+            if (out_size) *out_size = static_cast<uint64_t>(st.st_size);
+            return path;
+        }
+    }
+    if (out_size) *out_size = 0;
+    return cmake_dir + "/" + target;
+}
+
+static std::string FindProjectIcon(const std::string& cmake_dir, const std::string& app_name) {
+    std::string lower_name = ToLower(app_name);
+    std::vector<std::string> candidates = {
+        cmake_dir + "/" + app_name + ".png",
+        cmake_dir + "/" + lower_name + ".png",
+        cmake_dir + "/" + app_name + ".svg",
+        cmake_dir + "/" + lower_name + ".svg",
+        cmake_dir + "/icons/" + app_name + ".png",
+        cmake_dir + "/icons/" + lower_name + ".png",
+        cmake_dir + "/icons/" + app_name + ".svg",
+        cmake_dir + "/icons/" + lower_name + ".svg",
+        cmake_dir + "/desktop/" + app_name + ".png",
+        cmake_dir + "/desktop/" + lower_name + ".png",
+        cmake_dir + "/desktop/" + app_name + ".svg",
+        cmake_dir + "/desktop/" + lower_name + ".svg",
+        cmake_dir + "/assets/" + app_name + ".png",
+        cmake_dir + "/assets/" + lower_name + ".png",
+        cmake_dir + "/assets/" + app_name + ".svg",
+        cmake_dir + "/assets/" + lower_name + ".svg",
+        cmake_dir + "/resources/" + app_name + ".png",
+        cmake_dir + "/resources/" + lower_name + ".png",
+        cmake_dir + "/icon.png",
+        cmake_dir + "/icon.svg",
+        cmake_dir + "/app.png",
+        cmake_dir + "/logo.png"
+    };
+    for (const auto& path : candidates) {
+        if (access(path.c_str(), R_OK) == 0) {
+            return path;
+        }
+    }
+    return "";
+}
+
+static void ScanExistingDesktopFile(const std::string& cmake_dir, const std::string& app_name, Project& project, std::vector<std::string>& log) {
+    std::string lower_name = ToLower(app_name);
+    std::vector<std::string> candidates = {
+        cmake_dir + "/" + app_name + ".desktop",
+        cmake_dir + "/" + lower_name + ".desktop",
+        cmake_dir + "/desktop/" + app_name + ".desktop",
+        cmake_dir + "/desktop/" + lower_name + ".desktop",
+        cmake_dir + "/assets/" + app_name + ".desktop"
+    };
+
+    for (const auto& path : candidates) {
+        std::ifstream f(path);
+        if (f.is_open()) {
+            log.push_back("Found existing desktop file: " + path);
+            std::string line;
+            while (std::getline(f, line)) {
+                size_t eq = line.find('=');
+                if (eq == std::string::npos) continue;
+                std::string key = line.substr(0, eq);
+                std::string val = line.substr(eq + 1);
+                while (!key.empty() && std::isspace((unsigned char)key.back())) key.pop_back();
+                while (!val.empty() && (val.back() == '\r' || val.back() == '\n' || std::isspace((unsigned char)val.back()))) val.pop_back();
+                while (!val.empty() && std::isspace((unsigned char)val.front())) val.erase(val.begin());
+
+                if (key == "Name" && !val.empty()) project.desktop.name = val;
+                else if (key == "Comment" && !val.empty()) project.description = val;
+                else if (key == "Categories" && !val.empty()) project.desktop.categories = val;
+                else if (key == "MimeType" && !val.empty()) project.desktop.mime_type = val;
+                else if (key == "Terminal") project.desktop.terminal = (val == "true" || val == "1");
+                else if (key == "Exec" && !val.empty()) {
+                    size_t sp = val.find(' ');
+                    std::string exec_bin = (sp != std::string::npos) ? val.substr(0, sp) : val;
+                    if (!exec_bin.empty()) project.desktop.exec_cmd = exec_bin;
+                }
+            }
+            break;
+        }
+    }
 }
 
 std::string CMakeScanner::MapCMakePackageToApt(const std::string& cmake_pkg) {
@@ -97,8 +197,52 @@ static std::vector<std::string> TokenizeArgs(const std::string& args_str) {
     return tokens;
 }
 
+static DependencyEntry CreateFindPackageDependency(const std::string& pkg, const std::vector<std::string>& tokens) {
+    DependencyEntry dep;
+    std::string lower_pkg = ToLower(pkg);
+    if (lower_pkg == "pkgconfig" || lower_pkg == "pkg-config") {
+        dep.name = "PkgConfig";
+        dep.package_name = "pkg-config";
+        dep.check_command = "which pkg-config";
+    } else if (lower_pkg == "opengl" || lower_pkg == "gl") {
+        dep.name = "OpenGL";
+        dep.package_name = "libgl-dev";
+        dep.check_command = "dpkg-query -W -f='${Status}' libgl-dev 2>/dev/null | grep -q 'ok installed' || test -f /usr/include/GL/gl.h";
+    } else if (lower_pkg == "sdl2") {
+        dep.name = "SDL2";
+        dep.package_name = "libsdl2-dev";
+        dep.check_command = "pkg-config --exists sdl2 >/dev/null 2>&1 || test -f /usr/include/SDL2/SDL.h";
+    } else {
+        dep.name = pkg;
+        dep.package_name = CMakeScanner::MapCMakePackageToApt(pkg);
+        if (dep.package_name.rfind("lib", 0) == 0 && dep.package_name.find("-dev") != std::string::npos) {
+            dep.check_command = "dpkg-query -W -f='${Status}' " + dep.package_name + " 2>/dev/null | grep -q 'ok installed'";
+        } else {
+            dep.check_command = "which " + dep.package_name + " 2>/dev/null || which " + lower_pkg;
+        }
+    }
+    dep.is_required = false;
+    for (size_t t = 1; t < tokens.size(); ++t) {
+        std::string upper = tokens[t];
+        std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+        if (upper == "REQUIRED") dep.is_required = true;
+    }
+    return dep;
+}
+
 CMakeScanResult CMakeScanner::ScanFile(const std::string& cmake_file_path) {
     CMakeScanResult result;
+    std::string cmake_dir = ".";
+    size_t last_slash = cmake_file_path.find_last_of('/');
+    if (last_slash != std::string::npos) {
+        cmake_dir = cmake_file_path.substr(0, last_slash);
+    }
+    char abs_buf[PATH_MAX];
+    if (realpath(cmake_dir.c_str(), abs_buf)) {
+        cmake_dir = abs_buf;
+    }
+    result.cmake_dir = cmake_dir;
+
     std::ifstream in(cmake_file_path);
     if (!in.is_open()) {
         result.scan_log.push_back("Error: Could not open CMake file: " + cmake_file_path);
@@ -156,16 +300,7 @@ CMakeScanResult CMakeScanner::ScanFile(const std::string& cmake_file_path) {
                     } else if (current_cmd_name == "find_package" && !tokens.empty()) {
                         std::string pkg = tokens[0];
                         if (ToLower(pkg) != "threads") {
-                            DependencyEntry dep;
-                            dep.name = pkg;
-                            dep.package_name = MapCMakePackageToApt(pkg);
-                            dep.check_command = "which " + ToLower(pkg);
-                            dep.is_required = false;
-                            for (size_t t = 1; t < tokens.size(); ++t) {
-                                std::string upper = tokens[t];
-                                std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-                                if (upper == "REQUIRED") dep.is_required = true;
-                            }
+                            DependencyEntry dep = CreateFindPackageDependency(pkg, tokens);
                             result.dependencies.push_back(dep);
                             result.scan_log.push_back("Found dependency (find_package): " + pkg + " -> apt: " + dep.package_name);
                         }
@@ -205,11 +340,13 @@ CMakeScanResult CMakeScanner::ScanFile(const std::string& cmake_file_path) {
                                     if (u == "RUNTIME" || u == "DESTINATION" || u == "LIBRARY" || u == "ARCHIVE") break;
 
                                     FileEntry fe;
-                                    fe.source_path = "build/" + tokens[t];
-                                    fe.target_subpath = dest + "/" + tokens[t];
+                                    uint64_t size = 0;
+                                    fe.source_path = FindTargetBinary(cmake_dir, tokens[t], &size);
+                                    fe.file_size = size;
+                                    fe.target_subpath = (dest == "bin" || dest.empty()) ? tokens[t] : (dest + "/" + tokens[t]);
                                     fe.unix_permissions = 0755;
                                     result.install_files.push_back(fe);
-                                    result.scan_log.push_back("Found install target: " + tokens[t] + " -> " + fe.target_subpath);
+                                    result.scan_log.push_back("Found install target: " + fe.source_path + " (" + std::to_string(size) + " bytes) -> " + fe.target_subpath);
                                 }
                             } else if (first_upper == "FILES" && tokens.size() >= 2) {
                                 for (size_t t = 1; t < tokens.size(); ++t) {
@@ -218,15 +355,21 @@ CMakeScanResult CMakeScanner::ScanFile(const std::string& cmake_file_path) {
                                     if (u == "DESTINATION") break;
 
                                     FileEntry fe;
-                                    fe.source_path = tokens[t];
+                                    std::string src = tokens[t];
+                                    if (src.rfind("/", 0) != 0) {
+                                        src = cmake_dir + "/" + src;
+                                    }
+                                    fe.source_path = src;
+                                    struct stat st;
+                                    fe.file_size = (stat(src.c_str(), &st) == 0) ? st.st_size : 0;
                                     std::string filename = tokens[t];
                                     size_t s = filename.find_last_of('/');
                                     if (s != std::string::npos) filename = filename.substr(s + 1);
 
-                                    fe.target_subpath = dest + "/" + filename;
+                                    fe.target_subpath = dest.empty() ? filename : (dest + "/" + filename);
                                     fe.unix_permissions = 0644;
                                     result.install_files.push_back(fe);
-                                    result.scan_log.push_back("Found install file: " + tokens[t] + " -> " + fe.target_subpath);
+                                    result.scan_log.push_back("Found install file: " + fe.source_path + " -> " + fe.target_subpath);
                                 }
                             }
                         }
@@ -267,16 +410,7 @@ CMakeScanResult CMakeScanner::ScanFile(const std::string& cmake_file_path) {
                 } else if (current_cmd_name == "find_package" && !tokens.empty()) {
                     std::string pkg = tokens[0];
                     if (ToLower(pkg) != "threads") {
-                        DependencyEntry dep;
-                        dep.name = pkg;
-                        dep.package_name = MapCMakePackageToApt(pkg);
-                        dep.check_command = "which " + ToLower(pkg);
-                        dep.is_required = false;
-                        for (size_t t = 1; t < tokens.size(); ++t) {
-                            std::string upper = tokens[t];
-                            std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-                            if (upper == "REQUIRED") dep.is_required = true;
-                        }
+                        DependencyEntry dep = CreateFindPackageDependency(pkg, tokens);
                         result.dependencies.push_back(dep);
                         result.scan_log.push_back("Found dependency (find_package): " + pkg + " -> apt: " + dep.package_name);
                     }
@@ -300,11 +434,13 @@ CMakeScanResult CMakeScanner::ScanFile(const std::string& cmake_file_path) {
                                 if (u == "RUNTIME" || u == "DESTINATION" || u == "LIBRARY" || u == "ARCHIVE") break;
 
                                 FileEntry fe;
-                                fe.source_path = "build/" + tokens[t];
-                                fe.target_subpath = dest + "/" + tokens[t];
+                                uint64_t size = 0;
+                                fe.source_path = FindTargetBinary(cmake_dir, tokens[t], &size);
+                                fe.file_size = size;
+                                fe.target_subpath = (dest == "bin" || dest.empty()) ? tokens[t] : (dest + "/" + tokens[t]);
                                 fe.unix_permissions = 0755;
                                 result.install_files.push_back(fe);
-                                result.scan_log.push_back("Found install target: " + tokens[t] + " -> " + fe.target_subpath);
+                                result.scan_log.push_back("Found install target: " + fe.source_path + " (" + std::to_string(size) + " bytes) -> " + fe.target_subpath);
                             }
                         }
                     }
@@ -318,15 +454,24 @@ CMakeScanResult CMakeScanner::ScanFile(const std::string& cmake_file_path) {
 
     in.close();
 
-    // If install_files is empty but we have executable_targets, add default bin file entry
+    // If install_files is empty but we have executable_targets, add target binary entry
     if (result.install_files.empty() && !result.executable_targets.empty()) {
         for (const auto& target : result.executable_targets) {
             FileEntry fe;
-            fe.source_path = "build/" + target;
-            fe.target_subpath = "bin/" + target;
+            uint64_t size = 0;
+            fe.source_path = FindTargetBinary(cmake_dir, target, &size);
+            fe.file_size = size;
+            fe.target_subpath = target;
             fe.unix_permissions = 0755;
             result.install_files.push_back(fe);
+            result.scan_log.push_back("Found target binary: " + fe.source_path + " (" + std::to_string(size) + " bytes) -> " + fe.target_subpath);
         }
+    }
+
+    // Detect project icon if present
+    result.detected_icon_path = FindProjectIcon(cmake_dir, result.project_name);
+    if (!result.detected_icon_path.empty()) {
+        result.scan_log.push_back("Found application icon: " + result.detected_icon_path);
     }
 
     result.success = (!result.project_name.empty() || !result.executable_targets.empty());
@@ -359,6 +504,18 @@ StatusCode CMakeScanner::ApplyToProject(const std::string& cmake_file_path, Proj
     if (!res.executable_targets.empty()) {
         project.desktop.name = project.app_name;
         project.desktop.exec_cmd = res.executable_targets[0];
+    }
+
+    // Scan existing .desktop file in project dir if available
+    std::vector<std::string> desktop_scan_log;
+    ScanExistingDesktopFile(res.cmake_dir, project.app_name, project, desktop_scan_log);
+    for (const auto& l : desktop_scan_log) {
+        res.scan_log.push_back(l);
+    }
+
+    // Apply detected icon if found
+    if (!res.detected_icon_path.empty()) {
+        project.desktop.icon_source = res.detected_icon_path;
     }
 
     // Merge discovered files

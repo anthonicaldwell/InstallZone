@@ -22,9 +22,73 @@ namespace iz {
 class StudioApp {
 public:
     StudioApp() {
+        SetupUserConfigDirectory();
         m_project.ResetToDefaults();
         FindDefaultRunnerTemplate();
         m_output_installer_path = "dist/" + m_project.app_name + "-Installer.run";
+    }
+
+    static void SetupUserConfigDirectory() {
+        const char* home = std::getenv("HOME");
+        if (!home) return;
+
+        std::string base_dir = std::string(home) + "/.config/InstallZone";
+        std::string tpl_dir = base_dir + "/templates";
+        std::string ast_dir = base_dir + "/assets";
+
+        mkdir(base_dir.c_str(), 0755);
+        mkdir(tpl_dir.c_str(), 0755);
+        mkdir(ast_dir.c_str(), 0755);
+
+        // 1. Copy runner executable to templates/ if missing or if a source binary is newer
+        std::string target_runner = tpl_dir + "/installzone-runner";
+        struct stat target_st;
+        bool target_exists = (stat(target_runner.c_str(), &target_st) == 0);
+
+        const char* runner_candidates[] = {
+            "build/installzone-runner",
+            "../build/installzone-runner",
+            "./installzone-runner",
+            "/usr/bin/installzone-runner",
+            "/usr/share/installzone/templates/installzone-runner",
+            "/usr/local/bin/installzone-runner",
+            "/usr/local/share/installzone/templates/installzone-runner"
+        };
+        for (const char* src : runner_candidates) {
+            struct stat src_st;
+            if (stat(src, &src_st) == 0) {
+                if (!target_exists || src_st.st_mtime > target_st.st_mtime) {
+                    std::string cp_cmd = "cp \"" + std::string(src) + "\" \"" + target_runner + "\" && chmod 0755 \"" + target_runner + "\"";
+                    IzSystem(cp_cmd);
+                    break;
+                }
+            }
+        }
+
+        // 2. Copy assets (banner, chiptune, studio banner) to assets/ if missing or newer
+        const char* asset_files[] = { "chiptune.wav", "banner.jpg", "banner.png", "banner_studio.png" };
+        for (const char* f : asset_files) {
+            std::string target_file = ast_dir + "/" + f;
+            struct stat ast_target_st;
+            bool ast_target_exists = (stat(target_file.c_str(), &ast_target_st) == 0);
+
+            std::vector<std::string> candidates = {
+                std::string("assets/") + f,
+                std::string("../assets/") + f,
+                std::string("/usr/share/installzone/assets/") + f,
+                std::string("/usr/local/share/installzone/assets/") + f
+            };
+            for (const auto& src : candidates) {
+                struct stat src_st;
+                if (stat(src.c_str(), &src_st) == 0) {
+                    if (!ast_target_exists || src_st.st_mtime > ast_target_st.st_mtime) {
+                        std::string cp_cmd = "cp \"" + src + "\" \"" + target_file + "\"";
+                        IzSystem(cp_cmd);
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     void Run() {
@@ -33,6 +97,22 @@ public:
         if (m_ui.Initialize(_("app_title_studio"), 1060, 800) != StatusCode::Success) {
             std::cerr << "Failed to initialize Studio UI.\n";
             return;
+        }
+
+        // Load Studio ribbon banner (assets/banner_studio.png)
+        const char* home = std::getenv("HOME");
+        std::vector<std::string> studio_banners = {
+            (home ? std::string(home) + "/.config/InstallZone/assets/banner_studio.png" : ""),
+            "assets/banner_studio.png",
+            "../assets/banner_studio.png",
+            "/usr/share/installzone/assets/banner_studio.png",
+            "/usr/local/share/installzone/assets/banner_studio.png"
+        };
+        for (const auto& sb : studio_banners) {
+            if (!sb.empty() && access(sb.c_str(), R_OK) == 0) {
+                m_ui.LoadBannerTexture(sb.c_str());
+                break;
+            }
         }
 
         while (m_ui.ProcessEvents()) {
@@ -145,7 +225,9 @@ private:
     }
 
     void FindDefaultRunnerTemplate() {
-        const char* search_paths[] = {
+        const char* home = std::getenv("HOME");
+        std::vector<std::string> search_paths = {
+            (home ? std::string(home) + "/.config/InstallZone/templates/installzone-runner" : ""),
             "/usr/share/installzone/templates/installzone-runner",
             "/usr/bin/installzone-runner",
             "/usr/local/share/installzone/templates/installzone-runner",
@@ -154,8 +236,8 @@ private:
             "../build/installzone-runner",
             "./installzone-runner"
         };
-        for (const char* p : search_paths) {
-            if (access(p, R_OK) == 0) {
+        for (const auto& p : search_paths) {
+            if (!p.empty() && access(p.c_str(), R_OK) == 0) {
                 m_runner_template_path = p;
                 return;
             }
@@ -177,8 +259,8 @@ private:
 
         RenderMenuBar();
 
-        // Retro 2000's GPU Box Art Header Banner
-        m_ui.RenderBanner(0, 110.0f);
+        // Retro 2000's GPU Box Art Header Banner (Preserve Studio aspect ratio)
+        m_ui.RenderBanner(0, 110.0f, true);
         ImGui::Spacing();
 
         if (ImGui::BeginTabBar("StudioTabs", ImGuiTabBarFlags_None)) {
@@ -371,82 +453,141 @@ private:
         ImGui::Separator();
         ImGui::Spacing();
 
-        // New file entry form
-        ImGui::Text("Add File / Directory to Payload:");
-        ImGui::SetNextItemWidth(240.0f);
-        ImGui::InputTextWithHint("##SrcPath", _("lbl_source_path"), m_buf_new_src, sizeof(m_buf_new_src));
-        ImGui::SameLine();
-        if (ImGui::Button("File...##FileBrowse")) {
-            std::string sel = System::OpenFileDialog("Select File for Payload");
+        // Top quick-add action buttons
+        if (ImGui::Button("📁 Add File(s)...", ImVec2(160, 32))) {
+            std::string sel = System::OpenFileDialog("Select File to Add to Installer Payload");
             if (!sel.empty()) {
-                std::snprintf(m_buf_new_src, sizeof(m_buf_new_src), "%s", sel.c_str());
-                if (m_buf_new_dst[0] == '\0') {
-                    size_t slash = sel.find_last_of('/');
-                    std::string base = (slash != std::string::npos) ? sel.substr(slash + 1) : sel;
-                    std::snprintf(m_buf_new_dst, sizeof(m_buf_new_dst), "%s", base.c_str());
-                }
-            }
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Dir...##DirBrowse")) {
-            std::string sel = System::OpenDirectoryDialog("Select Directory for Payload");
-            if (!sel.empty()) {
-                std::snprintf(m_buf_new_src, sizeof(m_buf_new_src), "%s", sel.c_str());
-                if (m_buf_new_dst[0] == '\0') {
-                    size_t slash = sel.find_last_of('/');
-                    std::string base = (slash != std::string::npos) ? sel.substr(slash + 1) : sel;
-                    std::snprintf(m_buf_new_dst, sizeof(m_buf_new_dst), "%s", base.c_str());
-                }
-            }
-        }
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(200.0f);
-        ImGui::InputTextWithHint("##DstPath", _("lbl_target_path"), m_buf_new_dst, sizeof(m_buf_new_dst));
-        ImGui::SameLine();
-
-        const char* perms_items[] = { "0755 (Exec/Dir)", "0644 (Data/Config)" };
-        static int perms_idx = 0;
-        ImGui::SetNextItemWidth(140.0f);
-        if (ImGui::Combo("##PermsCombo", &perms_idx, perms_items, IM_ARRAYSIZE(perms_items))) {
-            m_new_perms = (perms_idx == 0) ? 0755 : 0644;
-        }
-        ImGui::SameLine();
-
-        if (ImGui::Button(_("btn_add_file"))) {
-            if (m_buf_new_src[0] != '\0' && m_buf_new_dst[0] != '\0') {
                 FileEntry fe;
-                fe.source_path = m_buf_new_src;
-                fe.target_subpath = m_buf_new_dst;
-                fe.unix_permissions = m_new_perms;
-
+                fe.source_path = sel;
+                size_t slash = sel.find_last_of('/');
+                fe.target_subpath = (slash != std::string::npos) ? sel.substr(slash + 1) : sel;
                 struct stat st;
-                if (stat(fe.source_path.c_str(), &st) == 0) {
+                if (stat(sel.c_str(), &st) == 0) {
                     fe.file_size = st.st_size;
+                    fe.unix_permissions = (st.st_mode & 0111) ? 0755 : 0644;
                 } else {
                     fe.file_size = 0;
+                    fe.unix_permissions = 0755;
                 }
                 m_project.files.push_back(fe);
-
-                m_buf_new_src[0] = '\0';
-                m_buf_new_dst[0] = '\0';
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("📂 Add Directory...", ImVec2(170, 32))) {
+            std::string sel = System::OpenDirectoryDialog("Select Directory to Add to Installer Payload");
+            if (!sel.empty()) {
+                size_t slash = sel.find_last_of('/');
+                std::string dir_name = (slash != std::string::npos) ? sel.substr(slash + 1) : sel;
+                DIR* d = opendir(sel.c_str());
+                if (d) {
+                    struct dirent* ent;
+                    while ((ent = readdir(d)) != nullptr) {
+                        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+                        std::string fpath = sel + "/" + ent->d_name;
+                        struct stat st;
+                        if (stat(fpath.c_str(), &st) == 0 && !S_ISDIR(st.st_mode)) {
+                            FileEntry fe;
+                            fe.source_path = fpath;
+                            fe.target_subpath = dir_name + "/" + ent->d_name;
+                            fe.file_size = st.st_size;
+                            fe.unix_permissions = (st.st_mode & 0111) ? 0755 : 0644;
+                            m_project.files.push_back(fe);
+                        }
+                    }
+                    closedir(d);
+                }
             }
         }
 
         ImGui::Spacing();
+
+        // Custom manual file entry card
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.16f, 0.20f, 0.27f, 0.50f));
+        if (ImGui::BeginChild("ManualAddCard", ImVec2(-1, 115), true)) {
+            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Custom File / Destination Rule:");
+
+            // Row 1: Source file / dir with clear browse buttons
+            float btn_w = 95.0f;
+            float input_w = ImGui::GetContentRegionAvail().x - (btn_w * 2.0f) - 20.0f;
+            ImGui::SetNextItemWidth(input_w);
+            ImGui::InputTextWithHint("##SrcPath", "Source file or directory on development machine", m_buf_new_src, sizeof(m_buf_new_src));
+            ImGui::SameLine();
+            if (ImGui::Button("File...##FileBrowse", ImVec2(btn_w, 0))) {
+                std::string sel = System::OpenFileDialog("Select File for Payload");
+                if (!sel.empty()) {
+                    std::snprintf(m_buf_new_src, sizeof(m_buf_new_src), "%s", sel.c_str());
+                    if (m_buf_new_dst[0] == '\0') {
+                        size_t slash = sel.find_last_of('/');
+                        std::string base = (slash != std::string::npos) ? sel.substr(slash + 1) : sel;
+                        std::snprintf(m_buf_new_dst, sizeof(m_buf_new_dst), "%s", base.c_str());
+                    }
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Dir...##DirBrowse", ImVec2(btn_w, 0))) {
+                std::string sel = System::OpenDirectoryDialog("Select Directory for Payload");
+                if (!sel.empty()) {
+                    std::snprintf(m_buf_new_src, sizeof(m_buf_new_src), "%s", sel.c_str());
+                    if (m_buf_new_dst[0] == '\0') {
+                        size_t slash = sel.find_last_of('/');
+                        std::string base = (slash != std::string::npos) ? sel.substr(slash + 1) : sel;
+                        std::snprintf(m_buf_new_dst, sizeof(m_buf_new_dst), "%s", base.c_str());
+                    }
+                }
+            }
+
+            // Row 2: Target subpath & permissions
+            ImGui::SetNextItemWidth(input_w * 0.55f);
+            ImGui::InputTextWithHint("##DstPath", "Target subpath in install directory (e.g. bin/my-app)", m_buf_new_dst, sizeof(m_buf_new_dst));
+            ImGui::SameLine();
+
+            const char* perms_items[] = { "0755 (Exec/Dir)", "0644 (Data/Config)" };
+            static int perms_idx = 0;
+            ImGui::SetNextItemWidth(140.0f);
+            if (ImGui::Combo("##PermsCombo", &perms_idx, perms_items, IM_ARRAYSIZE(perms_items))) {
+                m_new_perms = (perms_idx == 0) ? 0755 : 0644;
+            }
+            ImGui::SameLine();
+
+            if (ImGui::Button(_("btn_add_file"), ImVec2(130, 0))) {
+                if (m_buf_new_src[0] != '\0' && m_buf_new_dst[0] != '\0') {
+                    FileEntry fe;
+                    fe.source_path = m_buf_new_src;
+                    fe.target_subpath = m_buf_new_dst;
+                    fe.unix_permissions = m_new_perms;
+
+                    struct stat st;
+                    if (stat(fe.source_path.c_str(), &st) == 0) {
+                        fe.file_size = st.st_size;
+                    } else {
+                        fe.file_size = 0;
+                    }
+                    m_project.files.push_back(fe);
+
+                    m_buf_new_src[0] = '\0';
+                    m_buf_new_dst[0] = '\0';
+                }
+            }
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+
+        ImGui::Spacing();
         ImGui::Separator();
 
-        // Files Table
+        // Files Table with inline Browse buttons
         ImVec2 size = ImVec2(-1, 300);
-        if (ImGui::BeginTable("FilesTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, size)) {
+        if (ImGui::BeginTable("FilesTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, size)) {
             ImGui::TableSetupColumn(_("lbl_source_path"), ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn(_("lbl_target_path"), ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn(_("lbl_permissions"), ImGuiTableColumnFlags_WidthFixed, 100.0f);
-            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+            ImGui::TableSetupColumn(_("lbl_permissions"), ImGuiTableColumnFlags_WidthFixed, 90.0f);
+            ImGui::TableSetupColumn("Browse", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 75.0f);
             ImGui::TableHeadersRow();
 
             int to_remove = -1;
             for (size_t i = 0; i < m_project.files.size(); ++i) {
-                const auto& f = m_project.files[i];
+                auto& f = m_project.files[i];
                 ImGui::TableNextRow();
 
                 ImGui::TableSetColumnIndex(0);
@@ -459,7 +600,21 @@ private:
                 ImGui::Text("0%o", f.unix_permissions);
 
                 ImGui::TableSetColumnIndex(3);
-                ImGui::PushID(static_cast<int>(i));
+                ImGui::PushID(static_cast<int>(i * 2));
+                if (ImGui::SmallButton("Browse...")) {
+                    std::string sel = System::OpenFileDialog("Replace Source File", f.source_path);
+                    if (!sel.empty()) {
+                        f.source_path = sel;
+                        struct stat st;
+                        if (stat(sel.c_str(), &st) == 0) {
+                            f.file_size = st.st_size;
+                        }
+                    }
+                }
+                ImGui::PopID();
+
+                ImGui::TableSetColumnIndex(4);
+                ImGui::PushID(static_cast<int>(i * 2 + 1));
                 if (ImGui::SmallButton("Delete")) {
                     to_remove = static_cast<int>(i);
                 }

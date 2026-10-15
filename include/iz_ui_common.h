@@ -54,9 +54,9 @@ public:
 
     void ApplyTheme();
     void RenderLanguageSelector();
-    void RenderBanner(unsigned int texture_id, float banner_height = 115.0f);
+    void RenderBanner(unsigned int texture_id, float banner_height = 115.0f, bool preserve_aspect = true);
 
-    unsigned int LoadBannerTexture();
+    unsigned int LoadBannerTexture(const char* custom_path = nullptr);
     static unsigned int LoadTextureFromFile(const char* filepath, int* out_width = nullptr, int* out_height = nullptr);
 
     SDL_Window* GetWindow() const { return m_window; }

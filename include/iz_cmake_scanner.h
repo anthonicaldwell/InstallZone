@@ -13,6 +13,8 @@ struct CMakeScanResult {
     std::string version;
     std::string description;
     std::string homepage_url;
+    std::string cmake_dir;
+    std::string detected_icon_path;
     std::vector<std::string> executable_targets;
     std::vector<FileEntry> install_files;
     std::vector<DependencyEntry> dependencies;

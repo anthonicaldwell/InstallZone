@@ -54,6 +54,23 @@ uint32_t Archive::CalculateCRC32(const uint8_t* data, size_t length, uint32_t in
     return ~crc;
 }
 
+static std::string FindInternalAsset(const std::string& filename) {
+    const char* home = std::getenv("HOME");
+    std::vector<std::string> search = {
+        (home ? std::string(home) + "/.config/InstallZone/assets/" + filename : ""),
+        "assets/" + filename,
+        "../assets/" + filename,
+        "/usr/share/installzone/assets/" + filename,
+        "/usr/local/share/installzone/assets/" + filename
+    };
+    for (const auto& p : search) {
+        if (!p.empty() && access(p.c_str(), R_OK) == 0) {
+            return p;
+        }
+    }
+    return "";
+}
+
 StatusCode Archive::PackStandaloneInstaller(
     const std::string& runner_template_path,
     const Project& project,
@@ -109,15 +126,64 @@ StatusCode Archive::PackStandaloneInstaller(
     out.write(manifest_str.data(), manifest_len);
     running_crc = CalculateCRC32(reinterpret_cast<const uint8_t*>(manifest_str.data()), manifest_len, running_crc);
 
+    // Assemble file entries: project files + internal runner assets
+    std::vector<FileEntry> files_to_pack = project.files;
+
+    // 1. Bundle chiptune music
+    std::string chiptune_src = FindInternalAsset("chiptune.wav");
+    if (!chiptune_src.empty()) {
+        FileEntry fe;
+        fe.source_path = chiptune_src;
+        fe.target_subpath = "__iz_internal__/chiptune.wav";
+        fe.unix_permissions = 0644;
+        files_to_pack.push_back(fe);
+    }
+
+    // 2. Bundle 2000's GPU box art banner
+    std::string banner_src = FindInternalAsset("banner.jpg");
+    if (!banner_src.empty()) {
+        FileEntry fe;
+        fe.source_path = banner_src;
+        fe.target_subpath = "__iz_internal__/banner.jpg";
+        fe.unix_permissions = 0644;
+        files_to_pack.push_back(fe);
+    }
+
+    // 3. Bundle application icon (so local path on build machine doesn't break installer)
+    std::string icon_src = project.desktop.icon_source;
+    if (!icon_src.empty() && access(icon_src.c_str(), R_OK) != 0) {
+        for (const auto& pf : project.files) {
+            size_t sl = pf.source_path.find_last_of('/');
+            if (sl != std::string::npos) {
+                std::string cand = pf.source_path.substr(0, sl) + "/" + icon_src;
+                if (access(cand.c_str(), R_OK) == 0) {
+                    icon_src = cand;
+                    break;
+                }
+            }
+        }
+    }
+    if (!icon_src.empty() && access(icon_src.c_str(), R_OK) == 0) {
+        FileEntry fe;
+        fe.source_path = icon_src;
+        std::string ext = ".png";
+        size_t dot = icon_src.find_last_of('.');
+        if (dot != std::string::npos) ext = icon_src.substr(dot);
+        fe.target_subpath = "__iz_internal__/app_icon" + ext;
+        fe.unix_permissions = 0644;
+        files_to_pack.push_back(fe);
+        if (log_cb) log_cb("Bundling application icon: " + icon_src);
+    }
+
     // Write File Entries
-    uint32_t num_files = static_cast<uint32_t>(project.files.size());
+    uint32_t num_files = static_cast<uint32_t>(files_to_pack.size());
     out.write(reinterpret_cast<const char*>(&num_files), sizeof(num_files));
     running_crc = CalculateCRC32(reinterpret_cast<const uint8_t*>(&num_files), sizeof(num_files), running_crc);
 
-    if (log_cb) log_cb("Packing " + std::to_string(num_files) + " payload files...");
+    if (log_cb) log_cb("Packing " + std::to_string(num_files) + " payload & internal assets...");
 
-    for (size_t i = 0; i < project.files.size(); ++i) {
-        const auto& f = project.files[i];
+    for (size_t i = 0; i < files_to_pack.size(); ++i) {
+        const auto& f = files_to_pack[i];
         if (progress_cb) {
             float p = static_cast<float>(i) / static_cast<float>(num_files > 0 ? num_files : 1);
             progress_cb(p, f.target_subpath);
@@ -139,7 +205,7 @@ StatusCode Archive::PackStandaloneInstaller(
         // Open source file
         std::ifstream src_file(f.source_path, std::ios::binary | std::ios::ate);
         if (!src_file.is_open()) {
-            if (log_cb) log_cb("Warning: Source file not found: " + f.source_path + " (skipping)");
+            if (log_cb) log_cb("ERROR: Source file not found: " + f.source_path + " (0 bytes written, please verify file path!)");
             uint64_t zero_size = 0;
             out.write(reinterpret_cast<const char*>(&zero_size), sizeof(zero_size));
             running_crc = CalculateCRC32(reinterpret_cast<const uint8_t*>(&zero_size), sizeof(zero_size), running_crc);
@@ -304,7 +370,19 @@ StatusCode Archive::ExtractEmbeddedPayload(
         uint64_t file_size = 0;
         in.read(reinterpret_cast<char*>(&file_size), sizeof(file_size));
 
-        std::string target_full_path = destination_dir + "/" + subpath;
+        // Skip internal runner assets (__iz_internal__/*) so they are not installed to destination prefix
+        if (subpath.rfind("__iz_internal__/", 0) == 0) {
+            in.seekg(file_size, std::ios::cur);
+            continue;
+        }
+
+        std::string effective_subpath = subpath;
+        if ((destination_dir.length() >= 4 && destination_dir.rfind("/bin") == destination_dir.length() - 4) &&
+            effective_subpath.rfind("bin/", 0) == 0) {
+            effective_subpath = effective_subpath.substr(4);
+        }
+
+        std::string target_full_path = destination_dir + "/" + effective_subpath;
 
         if (progress_cb) {
             float p = static_cast<float>(i) / static_cast<float>(num_files > 0 ? num_files : 1);
@@ -355,6 +433,72 @@ StatusCode Archive::ExtractEmbeddedPayload(
 
     if (progress_cb) progress_cb(1.0f, "Completed");
     if (log_cb) log_cb("All payload files successfully extracted.");
+
+    return StatusCode::Success;
+}
+
+StatusCode Archive::ExtractInternalAssets(const std::string& exe_path, const std::string& temp_dir) {
+    uint64_t payload_offset = 0;
+    uint64_t payload_size = 0;
+    if (!HasEmbeddedPayload(exe_path, &payload_offset, &payload_size)) {
+        return StatusCode::ErrNotFound;
+    }
+
+    std::ifstream in(exe_path, std::ios::binary);
+    if (!in.is_open()) return StatusCode::ErrIo;
+
+    in.seekg(payload_offset + kStartMarkerLen + sizeof(uint32_t)); // Skip start marker & version
+
+    uint32_t manifest_len = 0;
+    in.read(reinterpret_cast<char*>(&manifest_len), sizeof(manifest_len));
+    in.seekg(manifest_len, std::ios::cur); // Skip manifest string
+
+    uint32_t num_files = 0;
+    in.read(reinterpret_cast<char*>(&num_files), sizeof(num_files));
+    if (num_files > kMaxFiles) return StatusCode::ErrCorruptData;
+
+    mkdir(temp_dir.c_str(), 0755);
+    std::vector<char> buffer(kChunkSize);
+
+    for (uint32_t i = 0; i < num_files; ++i) {
+        uint16_t path_len = 0;
+        in.read(reinterpret_cast<char*>(&path_len), sizeof(path_len));
+        if (path_len == 0 || path_len > kMaxPathLen) return StatusCode::ErrCorruptData;
+
+        std::string subpath(path_len, '\0');
+        in.read(&subpath[0], path_len);
+
+        uint32_t perms = 0644;
+        in.read(reinterpret_cast<char*>(&perms), sizeof(perms));
+
+        uint64_t file_size = 0;
+        in.read(reinterpret_cast<char*>(&file_size), sizeof(file_size));
+
+        if (subpath.rfind("__iz_internal__/", 0) == 0) {
+            std::string internal_rel = subpath.substr(16); // after "__iz_internal__/"
+            std::string target_path = temp_dir + "/" + internal_rel;
+
+            std::ofstream out(target_path, std::ios::binary);
+            if (out.is_open()) {
+                uint64_t remaining = file_size;
+                size_t file_loop = 0;
+                while (remaining > 0 && file_loop++ < kMaxLoopIterations) {
+                    size_t to_read = (remaining < kChunkSize) ? remaining : kChunkSize;
+                    in.read(buffer.data(), to_read);
+                    size_t bytes_read = in.gcount();
+                    if (bytes_read == 0) break;
+                    out.write(buffer.data(), bytes_read);
+                    remaining -= bytes_read;
+                }
+                out.close();
+                chmod(target_path.c_str(), perms);
+            } else {
+                in.seekg(file_size, std::ios::cur);
+            }
+        } else {
+            in.seekg(file_size, std::ios::cur);
+        }
+    }
 
     return StatusCode::Success;
 }

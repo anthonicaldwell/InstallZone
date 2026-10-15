@@ -4,6 +4,7 @@
 #include <cstring>
 #include <unistd.h>
 #include <cstdlib>
+#include <vector>
 
 namespace iz {
 
@@ -165,30 +166,29 @@ bool AudioManager::IsPlaying() {
     return s_audio.playing && !s_audio.muted;
 }
 
-bool AudioManager::StartDefaultChiptune() {
-    const char* paths[] = {
-        "assets/chiptune.wav",
-        "../assets/chiptune.wav",
-        "/usr/local/share/installzone/assets/chiptune.wav",
-        "/usr/share/installzone/assets/chiptune.wav"
-    };
+bool AudioManager::StartDefaultChiptune(const std::string& override_path) {
+    if (!override_path.empty() && access(override_path.c_str(), R_OK) == 0) {
+        if (LoadMusic(override_path)) {
+            PlayMusic(true);
+            return true;
+        }
+    }
 
     const char* home = std::getenv("HOME");
-    std::string home_path = (home ? std::string(home) : "") + "/.local/share/installzone/assets/chiptune.wav";
+    std::vector<std::string> paths = {
+        (home ? std::string(home) + "/.config/InstallZone/assets/chiptune.wav" : ""),
+        "assets/chiptune.wav",
+        "../assets/chiptune.wav",
+        "/usr/share/installzone/assets/chiptune.wav",
+        "/usr/local/share/installzone/assets/chiptune.wav"
+    };
 
-    for (const char* p : paths) {
-        if (access(p, R_OK) == 0) {
+    for (const auto& p : paths) {
+        if (!p.empty() && access(p.c_str(), R_OK) == 0) {
             if (LoadMusic(p)) {
                 PlayMusic(true);
                 return true;
             }
-        }
-    }
-
-    if (!home_path.empty() && access(home_path.c_str(), R_OK) == 0) {
-        if (LoadMusic(home_path)) {
-            PlayMusic(true);
-            return true;
         }
     }
 

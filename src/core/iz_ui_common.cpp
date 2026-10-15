@@ -302,46 +302,76 @@ unsigned int UIContext::LoadTextureFromFile(const char* filepath, int* out_width
     return tex;
 }
 
-unsigned int UIContext::LoadBannerTexture() {
+unsigned int UIContext::LoadBannerTexture(const char* custom_path) {
+    if (custom_path && access(custom_path, R_OK) == 0) {
+        if (m_banner_texture != 0) {
+            glDeleteTextures(1, &m_banner_texture);
+            m_banner_texture = 0;
+        }
+        m_banner_texture = LoadTextureFromFile(custom_path, &m_banner_width, &m_banner_height);
+        if (m_banner_texture) return m_banner_texture;
+    }
+
     if (m_banner_texture != 0) return m_banner_texture;
 
-    const char* paths[] = {
+    const char* home = std::getenv("HOME");
+    std::vector<std::string> paths = {
+        (home ? std::string(home) + "/.config/InstallZone/assets/banner.jpg" : ""),
+        (home ? std::string(home) + "/.config/InstallZone/assets/banner.png" : ""),
         "assets/banner.jpg",
         "assets/banner.png",
         "../assets/banner.jpg",
         "../assets/banner.png",
+        "/usr/share/installzone/assets/banner.jpg",
+        "/usr/share/installzone/assets/banner.png",
         "/usr/local/share/installzone/assets/banner.jpg",
         "/usr/local/share/installzone/assets/banner.png"
     };
 
-    const char* home = std::getenv("HOME");
-    std::string home_banner = (home ? std::string(home) : "") + "/.local/share/installzone/assets/banner.jpg";
-
-    for (const char* p : paths) {
-        if (access(p, R_OK) == 0) {
-            m_banner_texture = LoadTextureFromFile(p, &m_banner_width, &m_banner_height);
+    for (const auto& p : paths) {
+        if (!p.empty() && access(p.c_str(), R_OK) == 0) {
+            m_banner_texture = LoadTextureFromFile(p.c_str(), &m_banner_width, &m_banner_height);
             if (m_banner_texture) return m_banner_texture;
         }
-    }
-
-    if (!home_banner.empty() && access(home_banner.c_str(), R_OK) == 0) {
-        m_banner_texture = LoadTextureFromFile(home_banner.c_str(), &m_banner_width, &m_banner_height);
     }
 
     return m_banner_texture;
 }
 
-void UIContext::RenderBanner(unsigned int texture_id, float banner_height) {
+void UIContext::RenderBanner(unsigned int texture_id, float banner_height, bool preserve_aspect) {
     if (!texture_id) {
         texture_id = LoadBannerTexture();
     }
     if (!texture_id) return;
 
     float avail_width = ImGui::GetContentRegionAvail().x;
-    ImVec2 p0 = ImGui::GetCursorScreenPos();
-    ImVec2 p1 = ImVec2(p0.x + avail_width, p0.y + banner_height);
+    float aspect = (m_banner_height > 0) ? (static_cast<float>(m_banner_width) / static_cast<float>(m_banner_height)) : (16.0f / 9.0f);
+
+    float draw_w = avail_width;
+    float draw_h = banner_height;
+
+    if (preserve_aspect) {
+        draw_h = banner_height;
+        draw_w = draw_h * aspect;
+        if (draw_w > avail_width) {
+            draw_w = avail_width;
+            draw_h = draw_w / aspect;
+        }
+    }
+
+    float offset_x = (avail_width - draw_w) * 0.5f;
+    ImVec2 cursor = ImGui::GetCursorScreenPos();
+    ImVec2 p0 = ImVec2(cursor.x + offset_x, cursor.y);
+    ImVec2 p1 = ImVec2(p0.x + draw_w, p0.y + draw_h);
 
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+    // Subtle dark backdrop panel behind banner if centered
+    if (offset_x > 2.0f) {
+        ImVec2 bg0 = ImVec2(cursor.x, cursor.y);
+        ImVec2 bg1 = ImVec2(cursor.x + avail_width, cursor.y + draw_h);
+        draw_list->AddRectFilled(bg0, bg1, IM_COL32(18, 22, 28, 140), 6.0f);
+    }
 
     // Render image with rounded corners
     draw_list->AddImageRounded(
@@ -373,7 +403,7 @@ void UIContext::RenderBanner(unsigned int texture_id, float banner_height) {
     );
 
     // Advance cursor past banner
-    ImGui::Dummy(ImVec2(avail_width, banner_height));
+    ImGui::Dummy(ImVec2(avail_width, draw_h));
     ImGui::Spacing();
 }
 

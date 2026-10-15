@@ -23,7 +23,7 @@ public:
     static bool IsPlaying();
 
     // Auto-search and start default chiptune
-    static bool StartDefaultChiptune();
+    static bool StartDefaultChiptune(const std::string& override_path = "");
 };
 
 } // namespace iz

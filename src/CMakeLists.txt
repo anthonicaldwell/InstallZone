@@ -92,6 +92,7 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../assets/icons/installzone-studio.svg
 install(FILES 
     ${CMAKE_CURRENT_SOURCE_DIR}/../assets/banner.jpg
     ${CMAKE_CURRENT_SOURCE_DIR}/../assets/banner.png
+    ${CMAKE_CURRENT_SOURCE_DIR}/../assets/banner_studio.png
     ${CMAKE_CURRENT_SOURCE_DIR}/../assets/chiptune.wav
     DESTINATION share/installzone/assets
 )

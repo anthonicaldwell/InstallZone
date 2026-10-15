@@ -54,6 +54,14 @@ public:
         LogCallback log_cb = nullptr
     );
 
+    /**
+     * @brief Extracts internal installer assets (__iz_internal__) to a temporary directory.
+     */
+    static StatusCode ExtractInternalAssets(
+        const std::string& exe_path,
+        const std::string& temp_dir
+    );
+
 private:
     static uint32_t CalculateCRC32(const uint8_t* data, size_t length, uint32_t initial_crc = 0);
 };

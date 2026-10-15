@@ -29,12 +29,20 @@ cmake --build build -j"$(nproc)"
 # Determine installation destination (target /usr/bin and /usr/share)
 if [ "$(id -u)" -ne 0 ]; then
     echo "[3/5] Requesting sudo elevation to install into /usr/bin and /usr/share..."
-    if command -v sudo >/dev/null 2>&1; then
-        SUDO_CMD="sudo"
-    else
-        echo "Error: sudo is required to install into /usr/bin."
-        exit 1
+    if [ ! -t 0 ] && [ -n "$DISPLAY$WAYLAND_DISPLAY" ]; then
+        PASS=""
+        if command -v kdialog >/dev/null 2>&1; then
+            PASS=$(kdialog --password "InstallZone requires administrator privileges to install:")
+        elif command -v zenity >/dev/null 2>&1; then
+            PASS=$(zenity --password --title="InstallZone Authentication")
+        fi
+        if [ -n "$PASS" ]; then
+            echo "$PASS" | sudo -S -v 2>/dev/null
+        fi
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo -v
     fi
+    SUDO_CMD="sudo"
 else
     SUDO_CMD=""
 fi
@@ -60,6 +68,7 @@ $SUDO_CMD install -m 0644 assets/icons/installzone-studio.svg "$ICONS_DIR/instal
 $SUDO_CMD install -m 0644 assets/icons/installzone-studio.svg "$PIXMAPS_DIR/installzone-studio.svg"
 $SUDO_CMD install -m 0644 assets/banner.jpg "$ASSETS_DIR/banner.jpg"
 $SUDO_CMD install -m 0644 assets/banner.png "$ASSETS_DIR/banner.png"
+$SUDO_CMD install -m 0644 assets/banner_studio.png "$ASSETS_DIR/banner_studio.png"
 $SUDO_CMD install -m 0644 assets/chiptune.wav "$ASSETS_DIR/chiptune.wav"
 
 echo "[5/5] Updating desktop database and icon caches..."

@@ -15,11 +15,31 @@
 
 ---
 
+## 📸 Screenshots
+
+<div align="center">
+
+### InstallZone Studio (Creator & Packager IDE)
+*Intuitive multi-tab IDE with automated CMakeLists.txt scanning, file browsing, dependency configuration, and JavaScript hook scripting.*
+
+![InstallZone Studio](assets/screenshots/installzone-studio.png)
+
+<br/>
+
+### InstallZone Runner (Self-Extracting Wizard)
+*Early 2000s GPU box-art aesthetic, retro looping chiptune audio, single-prompt sudo elevation, and seamless FreeDesktop XDG menu integration.*
+
+![InstallZone Runner](assets/screenshots/installzone-runner.png)
+
+</div>
+
+---
+
 ## 📖 Overview
 
 **InstallZone** is a C++17 modular application packaging and installation system tailored for Linux, with special attention to Kubuntu 26.04.1 LTS and the KDE Plasma desktop environment.
 
-It uses **OpenGL 2.1** and **Dear ImGui** for maximum graphics hardware compatibility, paired with an embedded **JavaScript** scripting engine (Duktape) for executing advanced setup routines—such as generating user configuration directories (`~/.config/`), configuring dependencies like `navi`, and creating XDG FreeDesktop shortcuts.
+It utilizes **OpenGL 2.1** and **Dear ImGui** for maximum graphics hardware compatibility across older and modern GPUs, paired with an embedded **JavaScript** engine (Duktape) for executing advanced setup routines—such as generating user configuration directories (`~/.config/`), configuring tool dependencies like `navi`, and creating XDG FreeDesktop shortcuts.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -46,35 +66,44 @@ It uses **OpenGL 2.1** and **Dear ImGui** for maximum graphics hardware compatib
 
 ## ✨ Features
 
-- **Application 1: InstallZone Studio (`installzone-studio`)**:
-  - Full graphical interface to define projects, files, and dependencies.
-  - **CMake Scanner**: Automatically parses `CMakeLists.txt` to extract project name, version, targets, install rules, and apt dependencies.
-  - Native KDE `kdialog` / `zenity` file and directory browsers across all path inputs.
-  - JSON project format (`.izproj`) for version-controllable installer projects.
-  - Interactive JavaScript editors with pre-configured templates (e.g., `~/.config` setup, `navi` integration).
-  - Standalone installer builder: stitches the base runner with the compressed payload into an executable `.run` file with CRC32 integrity verification.
-- **Application 2: InstallZone Base Runner (`installzone-runner`)**:
-  - Bundled as the runtime for all packed installers.
-  - **Retro Chiptune Sound**: Seamlessly loops authentic 8-bit chiptune audio with volume control (defaults to 50% for user comfort) and instant mute checkbox.
-  - **Early 2000's GPU Box Art Header**: Stylized 3dfx/GeForce FX aesthetic with glowing CRT effects and hair-blasted banner.
-  - Standard system install target defaults to `/usr/bin` for binaries, `/usr/share/applications` for desktop entries, and `/usr/share/pixmaps` + `/usr/share/icons` for icons.
-  - Reads self-extracting payload directly from the executable.
-  - Automatic Polkit/sudo elevation prompts when target directories require root permissions.
-  - Real-time progress bar, file count, and scrollable log viewer.
-  - Generates uninstaller records and standalone `uninstall.sh`.
-- **JPL (NASA/Jet Propulsion Laboratory) Software Standard Compliance**:
-  - Bounded iteration loops (`kMaxLoopIterations`) preventing infinite hangs.
-  - Bounded queue memory models for log buffers and data transfers.
-  - Explicit function return status checking (`iz::StatusCode`).
-  - No recursion; iterative path traversal and extraction.
-- **Zero ImGui Context Loss Threading Architecture**:
+### Application 1: InstallZone Studio (`installzone-studio`)
+- **Visual Project Management**: Complete GUI to define applications, file payload hierarchies, permissions, and dependencies.
+- **Intelligent CMake Project Scanner**:
+  - Automatically parses `CMakeLists.txt` to extract project name, version, description, and targets.
+  - Automatically locates compiled binaries (`<project>/<target>`, `<project>/build/<target>`) and computes payload sizes.
+  - Automatically detects application icons (`.png`, `.svg` in project root, `icons/`, `desktop/`, `assets/`) and existing `.desktop` configurations.
+  - Automatically maps `find_package(...)` dependencies to Debian/Ubuntu APT packages (`libgl-dev`, `libsdl2-dev`, `pkg-config`, etc.).
+- **Native File Browsers**: Integrated KDE `kdialog` / `zenity` file and folder picker dialogs for all path inputs.
+- **JSON Project Format (`.izproj`)**: Clean, human-readable, and version-controllable project manifests.
+- **Embedded JavaScript Sandbox**: Test and edit `pre_install`, `post_install`, `pre_uninstall`, and `post_uninstall` hooks with live log console output.
+- **Standalone Packaging Engine**: Merges the base runner executable, project manifest, compressed payload files, application icon, 2000s GPU banner, and looping chiptune audio into a single standalone `.run` binary with CRC32 verification.
+
+### Application 2: InstallZone Runner (`installzone-runner`)
+- **Self-Extracting Standalone Wizard**: Distributed with each generated `.run` installer with zero external runner requirements.
+- **Early 2000s GPU Box Art Header**: High-energy retro aesthetic with glowing CRT effects and hair-blasted wind-tunnel artwork.
+- **Authentic Retro Chiptune Audio**: Built-in looping chiptune soundtrack with volume control (defaults safely to 50%) and mute toggle.
+- **Standard Linux Installation Paths**:
+  - Binaries install directly to `/usr/bin` (or custom prefix).
+  - Desktop entries install to `/usr/share/applications` with proper categories and exec paths.
+  - Icons install to `/usr/share/pixmaps` and `/usr/share/icons/hicolor/scalable/apps` with `0644` permissions.
+- **Single-Prompt Administrator Elevation**:
+  - Automatically detects when system directories (`/usr/bin`, `/opt`) or missing APT dependencies require root permissions.
+  - Prompts once graphically via KDE `kdialog --password` or `zenity`, batch-installs dependencies via `apt-get`, and safely extracts payload files.
+- **Uninstaller Generation**: Automatically creates uninstaller manifests and `/usr/bin/<app>-uninstall.sh` for clean one-click uninstalls.
+
+### Engineering & Safety Standards
+- **JPL (NASA/Jet Propulsion Laboratory) Software Compliance**:
+  - Strict bounded loop iterations (`kMaxLoopIterations`) preventing execution lockups.
+  - Fixed-size bounded queue models for log streaming and data transfers.
+  - Explicit function status returns (`iz::StatusCode`).
+  - No recursion; strictly iterative tree and archive extraction.
+- **Zero ImGui Context Loss Threading**:
   - UI rendering is strictly isolated to the main thread.
-  - Heavy file I/O, extraction, and JavaScript logic run on background worker threads.
-  - Thread-safe `WorkerBridge` guarantees smooth 60 FPS UI without lockups or context corruption.
-- **12 Supported Languages**:
-  - English (`en`), Ukrainian (`uk`), Japanese (`ja`), Chinese (`zh`), Spanish (`es`), French (`fr`), German (`de`), Portuguese (`pt`), Italian (`it`), Polish (`pl`), Korean (`ko`), Russian (`ru`).
-- **Clean Root Directory**:
-  - Only `install.sh`, `reinstall.sh`, `uninstall.sh`, `README.md`, and Git configuration in the root directory.
+  - File I/O, archive extraction, and JavaScript execution run on separate background worker threads synchronized via a thread-safe `WorkerBridge`.
+- **12 Out-of-the-Box Languages**:
+  - English (`en`), Ukrainian (`uk`), Japanese (`ja`), Chinese (`zh`), Spanish (`es`), French (`fr`), German (`de`), Portuguese (`pt`), Italian (`it`), Polish (`pl`), Korean (`ko`), and Russian (`ru`).
+- **Clean Root Repository**:
+  - The root directory only contains `install.sh`, `reinstall.sh`, `uninstall.sh`, `README.md`, `.gitignore`, and Git files.
 
 ---
 
@@ -83,26 +112,40 @@ It uses **OpenGL 2.1** and **Dear ImGui** for maximum graphics hardware compatib
 ### 1. Build and Install
 
 ```bash
-# Builds both applications and installs binaries directly to /usr/bin
+# Builds both applications and installs binaries to /usr/bin
 ./install.sh
 ```
 
-### 2. Reinstall or Uninstall
+### 2. Launching Studio
+
+Launch **InstallZone Studio** from your KDE Plasma Application Launcher or from your terminal:
 
 ```bash
-# Clean reinstall
+installzone-studio
+```
+
+### 3. Reinstall or Uninstall
+
+```bash
+# Rebuild and reinstall updated files
 ./reinstall.sh
 
 # Complete removal
 ./uninstall.sh
 ```
 
-### 3. Launching
+---
 
-Launch from the KDE Plasma Application Menu (**InstallZone Studio**) or execute:
+## 🛠️ Building from Source Manually
+
 ```bash
-installzone-studio
+cmake -S src -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
 ```
+
+The resulting binaries will be in `build/`:
+- `build/installzone-studio`
+- `build/installzone-runner`
 
 ---
 
