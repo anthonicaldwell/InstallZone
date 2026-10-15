@@ -40,7 +40,7 @@ public:
     std::string description{"A scriptable cross-platform application."};
     std::string category{"Utility"};
     std::string license{"MIT"};
-    std::string default_prefix{"/opt/myapp"};
+    std::string default_prefix{"/usr/bin"};
 
     std::vector<FileEntry> files;
     std::vector<DependencyEntry> dependencies;

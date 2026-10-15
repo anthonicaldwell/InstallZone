@@ -20,7 +20,7 @@ void Project::ResetToDefaults() {
     description = "A scriptable cross-platform application.";
     category = "Utility";
     license = "MIT";
-    default_prefix = "/opt/myapp";
+    default_prefix = "/usr/bin";
 
     files.clear();
     dependencies.clear();

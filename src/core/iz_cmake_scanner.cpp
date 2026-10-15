@@ -346,7 +346,7 @@ StatusCode CMakeScanner::ApplyToProject(const std::string& cmake_file_path, Proj
     if (!res.project_name.empty()) {
         project.app_name = res.project_name;
         project.app_id = "org." + ToLower(res.project_name);
-        project.default_prefix = "/opt/" + ToLower(res.project_name);
+        project.default_prefix = "/usr/bin";
     }
     if (!res.version.empty()) {
         project.version = res.version;

@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cassert>
+#include <string>
+#include <cstdlib>
 
 /**
  * @file jpl_defs.h
@@ -64,6 +66,11 @@ inline const char* StatusCodeToString(StatusCode code) {
         case StatusCode::ErrInternal:     return "Internal System Error";
         default:                          return "Unknown Error";
     }
+}
+
+inline int IzSystem(const std::string& cmd) {
+    int ret = std::system(cmd.c_str());
+    return ret;
 }
 
 } // namespace iz

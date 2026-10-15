@@ -4,6 +4,7 @@
 #include "iz_system.h"
 #include "iz_js_engine.h"
 #include "iz_i18n.h"
+#include "iz_audio.h"
 #include "iz_assert.h"
 
 #include "imgui.h"
@@ -43,9 +44,14 @@ public:
             return;
         }
 
+        // Initialize and play background chiptune (default 50% volume)
+        AudioManager::Initialize();
+        AudioManager::StartDefaultChiptune();
+
         std::string win_title = std::string(_("app_title_runner")) + " - " + m_project.app_name;
         if (m_ui.Initialize(win_title.c_str(), 740, 640) != StatusCode::Success) {
             std::cerr << "Failed to initialize Runner UI.\n";
+            AudioManager::Shutdown();
             return;
         }
 
@@ -58,6 +64,7 @@ public:
         if (m_worker_thread.joinable()) {
             m_worker_thread.join();
         }
+        AudioManager::Shutdown();
         m_ui.Shutdown();
     }
 
@@ -132,9 +139,21 @@ private:
         ImGui::Begin("RunnerMain", nullptr, window_flags);
         ImGui::PopStyleVar();
 
-        // Top bar with Language Selector
+        // Top bar with Language Selector and Chiptune Music Toggle
         float combo_width = 150.0f;
         ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "%s %s", m_project.app_name.c_str(), m_project.version.c_str());
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.0f);
+        bool music_enabled = !AudioManager::IsMuted();
+        if (ImGui::Checkbox("🎵 Music", &music_enabled)) {
+            AudioManager::SetMuted(!music_enabled);
+        }
+        ImGui::SameLine();
+        float vol = AudioManager::GetVolume();
+        ImGui::SetNextItemWidth(90.0f);
+        if (ImGui::SliderFloat("##MusicVol", &vol, 0.0f, 1.0f, "Vol: %.0f%%")) {
+            AudioManager::SetVolume(vol);
+        }
         ImGui::SameLine(ImGui::GetWindowWidth() - combo_width - 15.0f);
         m_ui.RenderLanguageSelector();
 
@@ -188,7 +207,17 @@ private:
         ImGui::TextColored(ImVec4(0.9f, 0.95f, 1.0f, 1.0f), "%s", _("lbl_destination"));
         ImGui::Spacing();
 
+        float btn_w = 90.0f;
+        float input_w = ImGui::GetContentRegionAvail().x - btn_w - 10.0f;
+        ImGui::SetNextItemWidth(input_w);
         ImGui::InputText("##DestPath", m_buf_destination, sizeof(m_buf_destination));
+        ImGui::SameLine();
+        if (ImGui::Button("Browse...##DestBrowse", ImVec2(btn_w, 0))) {
+            std::string chosen = System::OpenDirectoryDialog("Select Installation Directory", m_buf_destination);
+            if (!chosen.empty()) {
+                std::snprintf(m_buf_destination, sizeof(m_buf_destination), "%s", chosen.c_str());
+            }
+        }
         ImGui::Spacing();
 
         // Disk space info
@@ -325,7 +354,7 @@ private:
                     exec_target = m_project.default_prefix + "/" + exec_target;
                 }
                 std::string launch_cmd = "\"" + exec_target + "\" &";
-                system(launch_cmd.c_str());
+                IzSystem(launch_cmd);
                 exit(0);
             }
             ImGui::SameLine();

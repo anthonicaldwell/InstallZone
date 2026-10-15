@@ -26,40 +26,48 @@ cmake -S src -B build -DCMAKE_BUILD_TYPE=Release
 echo "[2/4] Compiling InstallZone Studio and Base Runner..."
 cmake --build build -j"$(nproc)"
 
-# Determine installation destination
-if [ "$(id -u)" -eq 0 ]; then
-    INSTALL_PREFIX="/usr/local"
-    echo "[3/4] Installing system-wide to $INSTALL_PREFIX (root mode)..."
+# Determine installation destination (target /usr/bin and /usr/share)
+if [ "$(id -u)" -ne 0 ]; then
+    echo "[3/5] Requesting sudo elevation to install into /usr/bin and /usr/share..."
+    if command -v sudo >/dev/null 2>&1; then
+        SUDO_CMD="sudo"
+    else
+        echo "Error: sudo is required to install into /usr/bin."
+        exit 1
+    fi
 else
-    INSTALL_PREFIX="$HOME/.local"
-    echo "[3/4] Installing to user directory $INSTALL_PREFIX (user mode)..."
+    SUDO_CMD=""
 fi
 
-BIN_DIR="$INSTALL_PREFIX/bin"
-APPS_DIR="$INSTALL_PREFIX/share/applications"
-ICONS_DIR="$INSTALL_PREFIX/share/icons/hicolor/scalable/apps"
-TEMPLATES_DIR="$INSTALL_PREFIX/share/installzone/templates"
-ASSETS_DIR="$INSTALL_PREFIX/share/installzone/assets"
+BIN_DIR="/usr/bin"
+APPS_DIR="/usr/share/applications"
+ICONS_DIR="/usr/share/icons/hicolor/scalable/apps"
+PIXMAPS_DIR="/usr/share/pixmaps"
+TEMPLATES_DIR="/usr/share/installzone/templates"
+ASSETS_DIR="/usr/share/installzone/assets"
 
-mkdir -p "$BIN_DIR" "$APPS_DIR" "$ICONS_DIR" "$TEMPLATES_DIR" "$ASSETS_DIR"
+echo "[4/5] Installing binaries to $BIN_DIR and assets to /usr/share/installzone..."
+$SUDO_CMD mkdir -p "$BIN_DIR" "$APPS_DIR" "$ICONS_DIR" "$PIXMAPS_DIR" "$TEMPLATES_DIR" "$ASSETS_DIR"
 
 # Install binaries
-install -m 0755 build/installzone-studio "$BIN_DIR/installzone-studio"
-install -m 0755 build/installzone-runner "$BIN_DIR/installzone-runner"
-install -m 0755 build/installzone-runner "$TEMPLATES_DIR/installzone-runner"
+$SUDO_CMD install -m 0755 build/installzone-studio "$BIN_DIR/installzone-studio"
+$SUDO_CMD install -m 0755 build/installzone-runner "$BIN_DIR/installzone-runner"
+$SUDO_CMD install -m 0755 build/installzone-runner "$TEMPLATES_DIR/installzone-runner"
 
-# Install desktop shortcut & icon
-install -m 0644 assets/desktop/installzone-studio.desktop "$APPS_DIR/installzone-studio.desktop"
-install -m 0644 assets/icons/installzone-studio.svg "$ICONS_DIR/installzone-studio.svg"
-install -m 0644 assets/banner.jpg "$ASSETS_DIR/banner.jpg"
-install -m 0644 assets/banner.png "$ASSETS_DIR/banner.png"
+# Install desktop shortcut & icons
+$SUDO_CMD install -m 0644 assets/desktop/installzone-studio.desktop "$APPS_DIR/installzone-studio.desktop"
+$SUDO_CMD install -m 0644 assets/icons/installzone-studio.svg "$ICONS_DIR/installzone-studio.svg"
+$SUDO_CMD install -m 0644 assets/icons/installzone-studio.svg "$PIXMAPS_DIR/installzone-studio.svg"
+$SUDO_CMD install -m 0644 assets/banner.jpg "$ASSETS_DIR/banner.jpg"
+$SUDO_CMD install -m 0644 assets/banner.png "$ASSETS_DIR/banner.png"
+$SUDO_CMD install -m 0644 assets/chiptune.wav "$ASSETS_DIR/chiptune.wav"
 
-echo "[4/4] Updating desktop database and icon caches..."
+echo "[5/5] Updating desktop database and icon caches..."
 if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database "$APPS_DIR" 2>/dev/null || true
+    $SUDO_CMD update-desktop-database "$APPS_DIR" 2>/dev/null || true
 fi
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-    gtk-update-icon-cache -f -t "$INSTALL_PREFIX/share/icons/hicolor" 2>/dev/null || true
+    $SUDO_CMD gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
 fi
 
 echo ""

@@ -146,7 +146,10 @@ private:
 
     void FindDefaultRunnerTemplate() {
         const char* search_paths[] = {
+            "/usr/share/installzone/templates/installzone-runner",
+            "/usr/bin/installzone-runner",
             "/usr/local/share/installzone/templates/installzone-runner",
+            "/usr/local/bin/installzone-runner",
             "build/installzone-runner",
             "../build/installzone-runner",
             "./installzone-runner"
@@ -220,9 +223,12 @@ private:
                     m_current_project_file.clear();
                 }
                 if (ImGui::MenuItem(_("btn_open"), "Ctrl+O")) {
-                    if (m_project.LoadFromFile("sample_project.izproj") == StatusCode::Success) {
-                        m_current_project_file = "sample_project.izproj";
-                        SyncProjectToBuffers();
+                    std::string sel = System::OpenFileDialog("Open InstallZone Project", "", "*.izproj|InstallZone Projects (*.izproj)");
+                    if (!sel.empty()) {
+                        if (m_project.LoadFromFile(sel) == StatusCode::Success) {
+                            m_current_project_file = sel;
+                            SyncProjectToBuffers();
+                        }
                     }
                 }
                 if (ImGui::MenuItem(_("btn_save"), "Ctrl+S")) {
@@ -233,9 +239,11 @@ private:
                 }
                 if (ImGui::MenuItem(_("btn_save_as"))) {
                     SyncBuffersToProject();
-                    std::string save_path = m_project.app_name + ".izproj";
-                    m_project.SaveToFile(save_path);
-                    m_current_project_file = save_path;
+                    std::string sel = System::SaveFileDialog("Save Project As", "", "*.izproj|InstallZone Projects (*.izproj)");
+                    if (!sel.empty()) {
+                        m_project.SaveToFile(sel);
+                        m_current_project_file = sel;
+                    }
                 }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Scan CMakeLists.txt...", "Ctrl+M")) {
@@ -280,8 +288,15 @@ private:
             ImGui::SameLine();
             ImGui::TextDisabled("(Extracts project name, version, targets, install rules, and apt dependencies)");
 
-            ImGui::SetNextItemWidth(380.0f);
+            ImGui::SetNextItemWidth(300.0f);
             ImGui::InputTextWithHint("##CMakeScanPath", "Path to CMakeLists.txt", m_buf_cmake_path, sizeof(m_buf_cmake_path));
+            ImGui::SameLine();
+            if (ImGui::Button("Browse...##CMakeBrowse")) {
+                std::string sel = System::OpenFileDialog("Select CMakeLists.txt", "", "*.txt|CMakeLists.txt (CMakeLists.txt)");
+                if (!sel.empty()) {
+                    std::snprintf(m_buf_cmake_path, sizeof(m_buf_cmake_path), "%s", sel.c_str());
+                }
+            }
             ImGui::SameLine();
             if (ImGui::Button("Scan CMakeLists.txt")) {
                 ScanCMakeFile(m_buf_cmake_path);
@@ -331,7 +346,15 @@ private:
 
         ImGui::Text("%s", _("lbl_install_prefix"));
         ImGui::NextColumn();
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 100.0f);
         ImGui::InputText("##Prefix", m_buf_prefix, sizeof(m_buf_prefix));
+        ImGui::SameLine();
+        if (ImGui::Button("Browse...##PrefixBrowse", ImVec2(90, 0))) {
+            std::string sel = System::OpenDirectoryDialog("Select Default Installation Directory", m_buf_prefix);
+            if (!sel.empty()) {
+                std::snprintf(m_buf_prefix, sizeof(m_buf_prefix), "%s", sel.c_str());
+            }
+        }
         ImGui::NextColumn();
 
         ImGui::Text("%s", _("lbl_description"));
@@ -350,16 +373,40 @@ private:
 
         // New file entry form
         ImGui::Text("Add File / Directory to Payload:");
-        ImGui::SetNextItemWidth(280.0f);
+        ImGui::SetNextItemWidth(240.0f);
         ImGui::InputTextWithHint("##SrcPath", _("lbl_source_path"), m_buf_new_src, sizeof(m_buf_new_src));
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(220.0f);
+        if (ImGui::Button("File...##FileBrowse")) {
+            std::string sel = System::OpenFileDialog("Select File for Payload");
+            if (!sel.empty()) {
+                std::snprintf(m_buf_new_src, sizeof(m_buf_new_src), "%s", sel.c_str());
+                if (m_buf_new_dst[0] == '\0') {
+                    size_t slash = sel.find_last_of('/');
+                    std::string base = (slash != std::string::npos) ? sel.substr(slash + 1) : sel;
+                    std::snprintf(m_buf_new_dst, sizeof(m_buf_new_dst), "%s", base.c_str());
+                }
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Dir...##DirBrowse")) {
+            std::string sel = System::OpenDirectoryDialog("Select Directory for Payload");
+            if (!sel.empty()) {
+                std::snprintf(m_buf_new_src, sizeof(m_buf_new_src), "%s", sel.c_str());
+                if (m_buf_new_dst[0] == '\0') {
+                    size_t slash = sel.find_last_of('/');
+                    std::string base = (slash != std::string::npos) ? sel.substr(slash + 1) : sel;
+                    std::snprintf(m_buf_new_dst, sizeof(m_buf_new_dst), "%s", base.c_str());
+                }
+            }
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(200.0f);
         ImGui::InputTextWithHint("##DstPath", _("lbl_target_path"), m_buf_new_dst, sizeof(m_buf_new_dst));
         ImGui::SameLine();
 
         const char* perms_items[] = { "0755 (Exec/Dir)", "0644 (Data/Config)" };
         static int perms_idx = 0;
-        ImGui::SetNextItemWidth(150.0f);
+        ImGui::SetNextItemWidth(140.0f);
         if (ImGui::Combo("##PermsCombo", &perms_idx, perms_items, IM_ARRAYSIZE(perms_items))) {
             m_new_perms = (perms_idx == 0) ? 0755 : 0644;
         }
@@ -630,12 +677,30 @@ private:
 
             ImGui::Text("%s", _("lbl_desktop_exec"));
             ImGui::NextColumn();
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 100.0f);
             ImGui::InputText("##DesktopExec", m_buf_desktop_exec, sizeof(m_buf_desktop_exec));
+            ImGui::SameLine();
+            if (ImGui::Button("Browse...##ExecBrowse", ImVec2(90, 0))) {
+                std::string sel = System::OpenFileDialog("Select Executable Binary", m_buf_prefix);
+                if (!sel.empty()) {
+                    size_t slash = sel.find_last_of('/');
+                    std::string base = (slash != std::string::npos) ? sel.substr(slash + 1) : sel;
+                    std::snprintf(m_buf_desktop_exec, sizeof(m_buf_desktop_exec), "%s", base.c_str());
+                }
+            }
             ImGui::NextColumn();
 
             ImGui::Text("%s", _("lbl_desktop_icon"));
             ImGui::NextColumn();
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 100.0f);
             ImGui::InputText("##DesktopIcon", m_buf_desktop_icon, sizeof(m_buf_desktop_icon));
+            ImGui::SameLine();
+            if (ImGui::Button("Browse...##IconBrowse", ImVec2(90, 0))) {
+                std::string sel = System::OpenFileDialog("Select Icon File", "", "*.png *.svg *.ico *.xpm|Icon Files (*.png *.svg *.ico)");
+                if (!sel.empty()) {
+                    std::snprintf(m_buf_desktop_icon, sizeof(m_buf_desktop_icon), "%s", sel.c_str());
+                }
+            }
             ImGui::NextColumn();
 
             ImGui::Text("%s", _("lbl_desktop_categories"));
@@ -661,15 +726,33 @@ private:
         static char template_buf[kMaxPathLen] = {0};
         if (template_buf[0] == '\0') std::snprintf(template_buf, sizeof(template_buf), "%s", m_runner_template_path.c_str());
         ImGui::Text("Runner Base Executable Path:");
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 100.0f);
         if (ImGui::InputText("##RunnerTemplate", template_buf, sizeof(template_buf))) {
             m_runner_template_path = template_buf;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Browse...##TemplateBrowse", ImVec2(90, 0))) {
+            std::string sel = System::OpenFileDialog("Select Runner Base Executable", "", "installzone-runner*|Executables");
+            if (!sel.empty()) {
+                m_runner_template_path = sel;
+                std::snprintf(template_buf, sizeof(template_buf), "%s", sel.c_str());
+            }
         }
 
         static char output_buf[kMaxPathLen] = {0};
         if (output_buf[0] == '\0') std::snprintf(output_buf, sizeof(output_buf), "%s", m_output_installer_path.c_str());
         ImGui::Text("%s", _("lbl_select_output"));
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 100.0f);
         if (ImGui::InputText("##OutputInstaller", output_buf, sizeof(output_buf))) {
             m_output_installer_path = output_buf;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Browse...##OutputBrowse", ImVec2(90, 0))) {
+            std::string sel = System::SaveFileDialog("Save Standalone Installer As", "", "*.run|Installers (*.run)");
+            if (!sel.empty()) {
+                m_output_installer_path = sel;
+                std::snprintf(output_buf, sizeof(output_buf), "%s", sel.c_str());
+            }
         }
 
         ImGui::Spacing();
@@ -713,7 +796,7 @@ private:
                 ImGui::SameLine();
                 if (ImGui::Button("Run Installer Now")) {
                     std::string run_cmd = "./" + m_output_installer_path + " &";
-                    system(run_cmd.c_str());
+                    IzSystem(run_cmd);
                 }
             } else {
                 ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "Packing failed: %s", m_worker_bridge.GetErrorMessage().c_str());
@@ -733,7 +816,7 @@ private:
         size_t slash = m_output_installer_path.find_last_of('/');
         if (slash != std::string::npos) {
             std::string parent = m_output_installer_path.substr(0, slash);
-            system(("mkdir -p \"" + parent + "\"").c_str());
+            IzSystem("mkdir -p \"" + parent + "\"");
         }
 
         // Launch background logic thread (completely separate from UI thread)

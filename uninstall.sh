@@ -8,27 +8,39 @@ echo "=================================================================="
 echo "                  Uninstalling InstallZone                        "
 echo "=================================================================="
 
-# Determine target prefix
-if [ "$(id -u)" -eq 0 ]; then
-    INSTALL_PREFIX="/usr/local"
+if [ "$(id -u)" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1; then
+        SUDO_CMD="sudo"
+    else
+        SUDO_CMD=""
+    fi
 else
-    INSTALL_PREFIX="$HOME/.local"
+    SUDO_CMD=""
 fi
 
-BIN_DIR="$INSTALL_PREFIX/bin"
-APPS_DIR="$INSTALL_PREFIX/share/applications"
-ICONS_DIR="$INSTALL_PREFIX/share/icons/hicolor/scalable/apps"
-TEMPLATES_DIR="$INSTALL_PREFIX/share/installzone"
+echo "Removing installed InstallZone files..."
+$SUDO_CMD rm -f /usr/bin/installzone-studio
+$SUDO_CMD rm -f /usr/bin/installzone-runner
+$SUDO_CMD rm -f /usr/share/applications/installzone-studio.desktop
+$SUDO_CMD rm -f /usr/share/icons/hicolor/scalable/apps/installzone-studio.svg
+$SUDO_CMD rm -f /usr/share/pixmaps/installzone-studio.svg
+$SUDO_CMD rm -rf /usr/share/installzone
 
-echo "Removing installed files from $INSTALL_PREFIX..."
-rm -f "$BIN_DIR/installzone-studio"
-rm -f "$BIN_DIR/installzone-runner"
-rm -f "$APPS_DIR/installzone-studio.desktop"
-rm -f "$ICONS_DIR/installzone-studio.svg"
-rm -rf "$TEMPLATES_DIR"
+# Also clean any legacy paths if present
+$SUDO_CMD rm -f /usr/local/bin/installzone-studio /usr/local/bin/installzone-runner
+$SUDO_CMD rm -f /usr/local/share/applications/installzone-studio.desktop
+$SUDO_CMD rm -f /usr/local/share/icons/hicolor/scalable/apps/installzone-studio.svg
+$SUDO_CMD rm -rf /usr/local/share/installzone
+rm -f "$HOME/.local/bin/installzone-studio" "$HOME/.local/bin/installzone-runner" 2>/dev/null || true
+rm -f "$HOME/.local/share/applications/installzone-studio.desktop" 2>/dev/null || true
+rm -f "$HOME/.local/share/icons/hicolor/scalable/apps/installzone-studio.svg" 2>/dev/null || true
+rm -rf "$HOME/.local/share/installzone" 2>/dev/null || true
 
 if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database "$APPS_DIR" 2>/dev/null || true
+    $SUDO_CMD update-desktop-database /usr/share/applications 2>/dev/null || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    $SUDO_CMD gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
 fi
 
 echo "InstallZone has been uninstalled successfully."

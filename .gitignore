@@ -20,3 +20,4 @@ lib/
 /tmp/test_*
 examples/sample_files/
 sample_project.izproj
+imgui.ini

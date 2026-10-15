@@ -96,26 +96,53 @@ StatusCode System::InstallDesktopEntry(const Project& project, const std::string
     if (!project.desktop.create_desktop_entry) return StatusCode::Success;
 
     std::string home = JsEngine::DetectRealUserHome();
-    std::string apps_dir = system_wide ? "/usr/local/share/applications" : (home + "/.local/share/applications");
-    std::string icons_dir = system_wide ? "/usr/local/share/icons/hicolor/scalable/apps" : (home + "/.local/share/icons/hicolor/scalable/apps");
+    bool is_system_install = (install_dir.rfind("/usr", 0) == 0 || install_dir.rfind("/opt", 0) == 0 || system_wide);
 
-    system(("mkdir -p \"" + apps_dir + "\"").c_str());
-    system(("mkdir -p \"" + icons_dir + "\"").c_str());
+    std::string apps_dir = is_system_install ? "/usr/share/applications" : (home + "/.local/share/applications");
+    std::string icons_dir = is_system_install ? "/usr/share/icons/hicolor/scalable/apps" : (home + "/.local/share/icons/hicolor/scalable/apps");
+    std::string pixmaps_dir = is_system_install ? "/usr/share/pixmaps" : (home + "/.local/share/pixmaps");
+
+    IzSystem("mkdir -p \"" + apps_dir + "\"");
+    IzSystem("mkdir -p \"" + icons_dir + "\"");
+    IzSystem("mkdir -p \"" + pixmaps_dir + "\"");
 
     std::string desktop_path = apps_dir + "/" + project.app_id + ".desktop";
     std::ofstream out(desktop_path);
     if (!out.is_open()) return StatusCode::ErrIo;
 
+    // Determine executable target path
     std::string exec_target = project.desktop.exec_cmd;
     if (exec_target.rfind("/", 0) != 0) {
-        exec_target = install_dir + "/" + exec_target;
+        if (install_dir == "/usr/bin" || install_dir == "/usr/local/bin") {
+            exec_target = install_dir + "/" + exec_target;
+        } else {
+            // Check if binary is in install_dir or install_dir/bin
+            if (access((install_dir + "/" + exec_target).c_str(), X_OK) == 0) {
+                exec_target = install_dir + "/" + exec_target;
+            } else if (access((install_dir + "/bin/" + exec_target).c_str(), X_OK) == 0) {
+                exec_target = install_dir + "/bin/" + exec_target;
+            } else {
+                exec_target = install_dir + "/" + exec_target;
+            }
+        }
     }
 
-    std::string icon_name = project.app_id;
+    // Determine installed icon path
+    std::string icon_val = project.app_id;
     if (!project.desktop.icon_source.empty()) {
-        std::string icon_dst = icons_dir + "/" + project.app_id + ".svg";
-        std::string cp_cmd = "cp \"" + project.desktop.icon_source + "\" \"" + icon_dst + "\" 2>/dev/null";
-        system(cp_cmd.c_str());
+        std::string ext = ".png";
+        size_t dot = project.desktop.icon_source.find_last_of('.');
+        if (dot != std::string::npos) ext = project.desktop.icon_source.substr(dot);
+
+        std::string icon_dst_scalable = icons_dir + "/" + project.app_id + ext;
+        std::string icon_dst_pixmap = pixmaps_dir + "/" + project.app_id + ext;
+        IzSystem("cp \"" + project.desktop.icon_source + "\" \"" + icon_dst_scalable + "\" 2>/dev/null");
+        IzSystem("cp \"" + project.desktop.icon_source + "\" \"" + icon_dst_pixmap + "\" 2>/dev/null");
+
+        // Account for local path install so desktop entry icon is never broken
+        if (!is_system_install) {
+            icon_val = icon_dst_scalable;
+        }
     }
 
     out << "[Desktop Entry]\n";
@@ -125,7 +152,8 @@ StatusCode System::InstallDesktopEntry(const Project& project, const std::string
     out << "GenericName=" << project.app_name << "\n";
     out << "Comment=" << project.description << "\n";
     out << "Exec=\"" << exec_target << "\"\n";
-    out << "Icon=" << icon_name << "\n";
+    out << "Icon=" << icon_val << "\n";
+    out << "Path=" << install_dir << "\n";
     out << "Terminal=" << (project.desktop.terminal ? "true" : "false") << "\n";
     out << "Categories=" << project.desktop.categories << "\n";
     if (!project.desktop.mime_type.empty()) {
@@ -135,8 +163,8 @@ StatusCode System::InstallDesktopEntry(const Project& project, const std::string
     out.close();
 
     chmod(desktop_path.c_str(), 0644);
-    system("update-desktop-database 2>/dev/null");
-    system("gtk-update-icon-cache 2>/dev/null");
+    IzSystem("update-desktop-database 2>/dev/null");
+    IzSystem("gtk-update-icon-cache 2>/dev/null");
 
     return StatusCode::Success;
 }
@@ -152,7 +180,7 @@ StatusCode System::RemoveDesktopEntry(const std::string& app_id, bool system_wid
     remove(desktop_file.c_str());
     remove(icon_file.c_str());
 
-    system("update-desktop-database 2>/dev/null");
+    IzSystem("update-desktop-database 2>/dev/null");
     return StatusCode::Success;
 }
 
@@ -286,6 +314,65 @@ StatusCode System::PerformUninstall(const std::string& uninstall_json_path, LogC
 
     if (log_cb) log_cb("Uninstallation completed successfully.");
     return StatusCode::Success;
+}
+
+static std::string RunDialogCommand(const std::string& cmd) {
+    FILE* p = popen(cmd.c_str(), "r");
+    if (!p) return "";
+    char buf[kMaxPathLen];
+    std::string result;
+    if (fgets(buf, sizeof(buf), p) != nullptr) {
+        result = buf;
+        while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) {
+            result.pop_back();
+        }
+    }
+    pclose(p);
+    return result;
+}
+
+std::string System::OpenFileDialog(const std::string& title, const std::string& start_dir, const std::string& filter) {
+    std::string dir = start_dir.empty() ? JsEngine::DetectRealUserHome() : start_dir;
+
+    if (system("which kdialog >/dev/null 2>&1") == 0) {
+        std::string cmd = "kdialog --title \"" + title + "\" --getopenfilename \"" + dir + "\"";
+        if (!filter.empty()) cmd += " \"" + filter + "\"";
+        return RunDialogCommand(cmd);
+    }
+    if (system("which zenity >/dev/null 2>&1") == 0) {
+        std::string cmd = "zenity --file-selection --title=\"" + title + "\" --filename=\"" + dir + "/\"";
+        return RunDialogCommand(cmd);
+    }
+    return "";
+}
+
+std::string System::OpenDirectoryDialog(const std::string& title, const std::string& start_dir) {
+    std::string dir = start_dir.empty() ? JsEngine::DetectRealUserHome() : start_dir;
+
+    if (system("which kdialog >/dev/null 2>&1") == 0) {
+        std::string cmd = "kdialog --title \"" + title + "\" --getexistingdirectory \"" + dir + "\"";
+        return RunDialogCommand(cmd);
+    }
+    if (system("which zenity >/dev/null 2>&1") == 0) {
+        std::string cmd = "zenity --file-selection --directory --title=\"" + title + "\" --filename=\"" + dir + "/\"";
+        return RunDialogCommand(cmd);
+    }
+    return "";
+}
+
+std::string System::SaveFileDialog(const std::string& title, const std::string& start_dir, const std::string& filter) {
+    std::string dir = start_dir.empty() ? JsEngine::DetectRealUserHome() : start_dir;
+
+    if (system("which kdialog >/dev/null 2>&1") == 0) {
+        std::string cmd = "kdialog --title \"" + title + "\" --getsavefilename \"" + dir + "\"";
+        if (!filter.empty()) cmd += " \"" + filter + "\"";
+        return RunDialogCommand(cmd);
+    }
+    if (system("which zenity >/dev/null 2>&1") == 0) {
+        std::string cmd = "zenity --file-selection --save --confirm-overwrite --title=\"" + title + "\" --filename=\"" + dir + "/\"";
+        return RunDialogCommand(cmd);
+    }
+    return "";
 }
 
 } // namespace iz

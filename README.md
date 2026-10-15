@@ -48,11 +48,16 @@ It uses **OpenGL 2.1** and **Dear ImGui** for maximum graphics hardware compatib
 
 - **Application 1: InstallZone Studio (`installzone-studio`)**:
   - Full graphical interface to define projects, files, and dependencies.
+  - **CMake Scanner**: Automatically parses `CMakeLists.txt` to extract project name, version, targets, install rules, and apt dependencies.
+  - Native KDE `kdialog` / `zenity` file and directory browsers across all path inputs.
   - JSON project format (`.izproj`) for version-controllable installer projects.
   - Interactive JavaScript editors with pre-configured templates (e.g., `~/.config` setup, `navi` integration).
   - Standalone installer builder: stitches the base runner with the compressed payload into an executable `.run` file with CRC32 integrity verification.
 - **Application 2: InstallZone Base Runner (`installzone-runner`)**:
   - Bundled as the runtime for all packed installers.
+  - **Retro Chiptune Sound**: Seamlessly loops authentic 8-bit chiptune audio with volume control (defaults to 50% for user comfort) and instant mute checkbox.
+  - **Early 2000's GPU Box Art Header**: Stylized 3dfx/GeForce FX aesthetic with glowing CRT effects and hair-blasted banner.
+  - Standard system install target defaults to `/usr/bin` for binaries, `/usr/share/applications` for desktop entries, and `/usr/share/pixmaps` + `/usr/share/icons` for icons.
   - Reads self-extracting payload directly from the executable.
   - Automatic Polkit/sudo elevation prompts when target directories require root permissions.
   - Real-time progress bar, file count, and scrollable log viewer.
@@ -78,7 +83,7 @@ It uses **OpenGL 2.1** and **Dear ImGui** for maximum graphics hardware compatib
 ### 1. Build and Install
 
 ```bash
-# Builds both applications and installs to ~/.local/bin or /usr/local/bin
+# Builds both applications and installs binaries directly to /usr/bin
 ./install.sh
 ```
 

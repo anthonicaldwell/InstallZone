@@ -127,14 +127,14 @@ StatusCode UIContext::Initialize(const char* title, int width, int height) {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    // Load multilingual fonts
-    I18n::LoadFonts(16.0f);
-
     ApplyTheme();
 
     // Setup Platform/Renderer backends
     ImGui_ImplSDL2_InitForOpenGL(m_window, m_gl_context);
     ImGui_ImplOpenGL2_Init();
+
+    // Load multilingual fonts
+    I18n::LoadFonts(16.0f);
 
     m_initialized = true;
     return StatusCode::Success;

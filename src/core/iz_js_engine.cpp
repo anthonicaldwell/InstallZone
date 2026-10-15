@@ -36,14 +36,14 @@ static void MakeDirectoryRecursive(const std::string& path, uid_t uid, gid_t gid
             *p = '\0';
             mkdir(tmp, 0755);
             if (change_owner) {
-                chown(tmp, uid, gid);
+                (void)!chown(tmp, uid, gid);
             }
             *p = '/';
         }
     }
     mkdir(tmp, 0755);
     if (change_owner) {
-        chown(tmp, uid, gid);
+        (void)!chown(tmp, uid, gid);
     }
 }
 
@@ -288,7 +288,7 @@ int JsEngine::NativeWriteFile(duk_context* ctx) {
     out.close();
 
     if (geteuid() == 0) {
-        chown(path.c_str(), GetRealUserId(), GetRealGroupId());
+        (void)!chown(path.c_str(), GetRealUserId(), GetRealGroupId());
     }
 
     duk_push_boolean(ctx, 1);
@@ -375,7 +375,7 @@ int JsEngine::NativeCopy(duk_context* ctx) {
     dst_file.close();
 
     if (geteuid() == 0) {
-        chown(dst.c_str(), GetRealUserId(), GetRealGroupId());
+        (void)!chown(dst.c_str(), GetRealUserId(), GetRealGroupId());
     }
 
     duk_push_boolean(ctx, 1);

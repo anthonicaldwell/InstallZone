@@ -1130,8 +1130,6 @@ void I18n::LoadFonts(float fontSize) {
         // Fallback default ImGui font
         io.Fonts->AddFontDefault();
     }
-
-    io.Fonts->Build();
 }
 
 } // namespace iz

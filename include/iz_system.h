@@ -43,6 +43,11 @@ public:
         const std::string& uninstall_json_path,
         LogCallback log_cb = nullptr
     );
+
+    // Native Desktop File & Directory Dialogs (KDE Plasma kdialog / Zenity)
+    static std::string OpenFileDialog(const std::string& title, const std::string& start_dir = "", const std::string& filter = "");
+    static std::string OpenDirectoryDialog(const std::string& title, const std::string& start_dir = "");
+    static std::string SaveFileDialog(const std::string& title, const std::string& start_dir = "", const std::string& filter = "");
 };
 
 } // namespace iz

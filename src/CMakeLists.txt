@@ -51,6 +51,7 @@ set(CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/iz_system.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/iz_ui_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/iz_cmake_scanner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/iz_audio.cpp
     ${THIRD_PARTY_SOURCES}
 )
 
@@ -84,9 +85,14 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../assets/icons/installzone-studio.svg
     DESTINATION share/icons/hicolor/scalable/apps
 )
 
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../assets/icons/installzone-studio.svg
+    DESTINATION share/pixmaps
+)
+
 install(FILES 
     ${CMAKE_CURRENT_SOURCE_DIR}/../assets/banner.jpg
     ${CMAKE_CURRENT_SOURCE_DIR}/../assets/banner.png
+    ${CMAKE_CURRENT_SOURCE_DIR}/../assets/chiptune.wav
     DESTINATION share/installzone/assets
 )
 
