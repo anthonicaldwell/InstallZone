@@ -108,6 +108,12 @@ private:
     char m_buf_destination[kMaxPathLen] = {0};
     bool m_create_desktop_entry{true};
 
+    bool m_is_already_installed{false};
+    std::string m_detected_uninstall_manifest;
+    std::string m_installed_prefix;
+    int m_maintenance_mode{0}; // 0 = Reinstall, 1 = Uninstall
+    bool m_is_uninstall_completed{false};
+
     WorkerBridge m_worker_bridge;
     std::thread m_worker_thread;
     std::vector<std::string> m_installed_files;
@@ -155,15 +161,30 @@ private:
         }
         std::snprintf(m_buf_destination, sizeof(m_buf_destination), "%s", m_project.default_prefix.c_str());
         m_create_desktop_entry = m_project.desktop.create_desktop_entry;
+
+        // Detect if application is already installed on the system
+        m_is_already_installed = System::DetectExistingInstallation(
+            m_project,
+            &m_detected_uninstall_manifest,
+            &m_installed_prefix
+        );
+        if (m_is_already_installed && !m_installed_prefix.empty()) {
+            std::snprintf(m_buf_destination, sizeof(m_buf_destination), "%s", m_installed_prefix.c_str());
+            m_project.default_prefix = m_installed_prefix;
+        }
     }
 
     void RunUninstall() {
         if (m_uninstall_manifest_path.empty()) {
             m_uninstall_manifest_path = m_project.default_prefix + "/installzone-uninstall.json";
         }
+        std::string sudo_pass;
+        if (!System::IsRoot()) {
+            System::EnsureSudo("uninstall " + m_project.app_name, &sudo_pass);
+        }
         System::PerformUninstall(m_uninstall_manifest_path, [](const std::string& msg) {
             std::cout << msg << "\n";
-        });
+        }, sudo_pass);
     }
 
     void RenderUI() {
@@ -215,6 +236,68 @@ private:
     }
 
     void RenderWelcomePage() {
+        if (m_is_already_installed) {
+            ImGui::TextColored(ImVec4(0.3f, 0.75f, 1.0f, 1.0f), "Maintenance Mode - Existing Installation Detected");
+            ImGui::Spacing();
+            ImGui::Text("Application: %s (v%s)", m_project.app_name.c_str(), m_project.version.c_str());
+            if (!m_installed_prefix.empty()) {
+                ImGui::Text("Detected Location: %s", m_installed_prefix.c_str());
+            }
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            ImGui::TextColored(ImVec4(0.95f, 0.95f, 1.0f, 1.0f), "Setup detected an existing installation on this system.");
+            ImGui::Text("Select the operation you want to perform:");
+            ImGui::Spacing();
+
+            ImGui::RadioButton(" Reinstall / Update", &m_maintenance_mode, 0);
+            ImGui::Indent(28.0f);
+            ImGui::TextDisabled("Reinstall all application components and update existing files.");
+            ImGui::Unindent(28.0f);
+            ImGui::Spacing();
+
+            ImGui::RadioButton(" Uninstall", &m_maintenance_mode, 1);
+            ImGui::Indent(28.0f);
+            ImGui::TextDisabled("Remove this application, desktop shortcut, and uninstaller from the system.");
+            ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.4f, 1.0f), "Note: System dependencies (apt packages) will be preserved.");
+            ImGui::Unindent(28.0f);
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            ImGui::Text("Application Details:");
+            if (ImGui::BeginChild("DescBox", ImVec2(-1, 110), true)) {
+                ImGui::TextWrapped("%s", m_project.description.c_str());
+            }
+            ImGui::EndChild();
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            if (ImGui::Button(_("btn_cancel"), ImVec2(100, 32))) {
+                exit(0);
+            }
+            ImGui::SameLine(ImGui::GetWindowWidth() - 140.0f);
+            if (m_maintenance_mode == 0) {
+                if (ImGui::Button("Reinstall >", ImVec2(120, 32))) {
+                    m_current_page = WizardPage::Destination;
+                }
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.3f, 0.3f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.15f, 0.15f, 1.0f));
+                if (ImGui::Button("Uninstall Now", ImVec2(120, 32))) {
+                    m_current_page = WizardPage::Installing;
+                    StartUninstallation();
+                }
+                ImGui::PopStyleColor(3);
+            }
+            return;
+        }
+
         ImGui::TextColored(ImVec4(0.9f, 0.95f, 1.0f, 1.0f), "%s", _("lbl_welcome"));
         ImGui::Spacing();
         ImGui::Text("Application: %s", m_project.app_name.c_str());
@@ -318,14 +401,20 @@ private:
         }
         ImGui::SameLine(ImGui::GetWindowWidth() - 140.0f);
 
-        if (ImGui::Button("Install Now", ImVec2(120, 32))) {
+        const char* install_btn_label = m_is_already_installed ? "Reinstall Now" : "Install Now";
+        if (ImGui::Button(install_btn_label, ImVec2(120, 32))) {
             m_current_page = WizardPage::Installing;
             StartInstallation();
         }
     }
 
     void RenderInstallingPage() {
-        ImGui::TextColored(ImVec4(0.9f, 0.95f, 1.0f, 1.0f), "%s", _("lbl_installing"));
+        bool is_uninstall = (m_maintenance_mode == 1 || m_is_uninstall_mode || m_is_uninstall_completed);
+        if (is_uninstall) {
+            ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.2f, 1.0f), "Uninstalling %s...", m_project.app_name.c_str());
+        } else {
+            ImGui::TextColored(ImVec4(0.9f, 0.95f, 1.0f, 1.0f), "%s", _("lbl_installing"));
+        }
         ImGui::Spacing();
 
         float p = m_worker_bridge.progress.load();
@@ -350,12 +439,31 @@ private:
                 m_current_page = WizardPage::Completed;
             } else {
                 ImGui::Spacing();
-                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Installation Error: %s", m_worker_bridge.GetErrorMessage().c_str());
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s Error: %s",
+                    is_uninstall ? "Uninstallation" : "Installation",
+                    m_worker_bridge.GetErrorMessage().c_str());
             }
         }
     }
 
     void RenderCompletedPage() {
+        bool is_uninstall = (m_maintenance_mode == 1 || m_is_uninstall_mode || m_is_uninstall_completed);
+        if (is_uninstall) {
+            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "Uninstallation Completed Successfully!");
+            ImGui::Spacing();
+            ImGui::Text("%s has been removed from your system.", m_project.app_name.c_str());
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.4f, 0.85f, 0.4f, 1.0f), "System dependencies and apt packages were safely preserved.");
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            if (ImGui::Button(_("btn_finish"), ImVec2(120, 36))) {
+                exit(0);
+            }
+            return;
+        }
+
         ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "%s", _("lbl_installed"));
         ImGui::Spacing();
         ImGui::Text("%s", _("lbl_install_complete"));
@@ -383,6 +491,106 @@ private:
         if (ImGui::Button(_("btn_finish"), ImVec2(120, 36))) {
             exit(0);
         }
+    }
+
+    void StartUninstallation() {
+        if (m_worker_thread.joinable()) {
+            m_worker_thread.join();
+        }
+        m_worker_bridge.Reset();
+        m_worker_bridge.is_running.store(true);
+        m_worker_bridge.SetOperation("Initializing uninstallation...");
+        m_is_uninstall_completed = true;
+
+        m_worker_thread = std::thread([this]() {
+            std::string prefix = m_installed_prefix.empty() ? m_project.default_prefix : m_installed_prefix;
+            bool is_system_install = (prefix.rfind("/usr", 0) == 0 ||
+                                      prefix.rfind("/opt", 0) == 0 ||
+                                      System::PathRequiresElevation(prefix));
+
+            std::string sudo_pass;
+            if (is_system_install && !System::IsRoot()) {
+                m_worker_bridge.SetOperation("Requesting administrator privileges...");
+                m_worker_bridge.AppendLog("Prompting for administrator elevation (sudo) to remove files...");
+                std::string reason = "uninstall " + m_project.app_name;
+                if (!System::EnsureSudo(reason, &sudo_pass)) {
+                    m_worker_bridge.Finish(false, "Administrator authentication was cancelled or failed.");
+                    return;
+                }
+                m_worker_bridge.AppendLog("Administrator privileges confirmed.");
+            }
+
+            m_worker_bridge.SetProgress(0.2f);
+            m_worker_bridge.SetOperation("Removing application files...");
+
+            // If an explicit manifest was detected, use it
+            std::string manifest_file = m_detected_uninstall_manifest;
+            if (manifest_file.empty()) {
+                std::vector<std::string> candidates = {
+                    prefix + "/" + m_project.app_id + "-uninstall.json",
+                    prefix + "/installzone-uninstall.json",
+                    prefix + "/" + m_project.app_name + "-uninstall.json"
+                };
+                for (const auto& c : candidates) {
+                    if (access(c.c_str(), R_OK) == 0) {
+                        manifest_file = c;
+                        break;
+                    }
+                }
+            }
+
+            StatusCode status = StatusCode::Success;
+            if (!manifest_file.empty()) {
+                status = System::PerformUninstall(
+                    manifest_file,
+                    [this](const std::string& msg) {
+                        m_worker_bridge.AppendLog(msg);
+                    },
+                    sudo_pass
+                );
+            } else {
+                m_worker_bridge.AppendLog("No uninstall manifest file found. Performing targeted removal...");
+
+                // Remove desktop entry & icons
+                m_worker_bridge.AppendLog("Removing desktop entries and icons...");
+                System::RemoveDesktopEntry(m_project.app_id, is_system_install, sudo_pass);
+                if (m_project.app_name != m_project.app_id) {
+                    System::RemoveDesktopEntry(m_project.app_name, is_system_install, sudo_pass);
+                }
+
+                // Remove binary
+                std::string exec_name = m_project.desktop.exec_cmd;
+                if (exec_name.empty()) exec_name = m_project.app_name;
+                size_t sp = exec_name.find(' ');
+                if (sp != std::string::npos) exec_name = exec_name.substr(0, sp);
+
+                std::vector<std::string> bin_targets = {
+                    prefix + "/" + exec_name,
+                    prefix + "/bin/" + exec_name
+                };
+                for (const auto& bin_target : bin_targets) {
+                    if (access(bin_target.c_str(), F_OK) == 0) {
+                        m_worker_bridge.AppendLog("Removing executable: " + bin_target);
+                        if (is_system_install && !System::IsRoot()) {
+                            System::RunElevatedCommand("rm -f \"" + bin_target + "\"", sudo_pass);
+                        } else {
+                            remove(bin_target.c_str());
+                        }
+                    }
+                }
+
+                m_worker_bridge.AppendLog("System dependencies (apt packages) were preserved.");
+                m_worker_bridge.AppendLog("Targeted uninstallation completed.");
+            }
+
+            m_worker_bridge.SetProgress(1.0f);
+            m_worker_bridge.SetOperation("Done");
+            if (status == StatusCode::Success) {
+                m_worker_bridge.Finish(true);
+            } else {
+                m_worker_bridge.Finish(false, "Uninstallation encountered errors.");
+            }
+        });
     }
 
     void StartInstallation() {

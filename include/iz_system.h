@@ -19,6 +19,12 @@ public:
     static bool EnsureSudo(const std::string& reason, std::string* out_password = nullptr);
     static StatusCode RunElevatedCommand(const std::string& cmd, const std::string& sudo_password = "", std::string* output = nullptr);
 
+    static bool DetectExistingInstallation(
+        const Project& project,
+        std::string* out_uninstall_manifest = nullptr,
+        std::string* out_installed_prefix = nullptr
+    );
+
     // Dependency verification
     static bool IsDependencySatisfied(const DependencyEntry& dep);
     static StatusCode InstallPackageApt(const std::string& package_name, std::string* output = nullptr);
@@ -33,7 +39,8 @@ public:
 
     static StatusCode RemoveDesktopEntry(
         const std::string& app_id,
-        bool system_wide
+        bool system_wide,
+        const std::string& sudo_password = ""
     );
 
     // Uninstaller generation
@@ -46,7 +53,8 @@ public:
 
     static StatusCode PerformUninstall(
         const std::string& uninstall_json_path,
-        LogCallback log_cb = nullptr
+        LogCallback log_cb = nullptr,
+        const std::string& sudo_password = ""
     );
 
     // Native Desktop File & Directory Dialogs (KDE Plasma kdialog / Zenity)

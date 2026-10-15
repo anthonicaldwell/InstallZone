@@ -320,24 +320,119 @@ StatusCode System::InstallDesktopEntry(
     return StatusCode::Success;
 }
 
-StatusCode System::RemoveDesktopEntry(const std::string& app_id, bool system_wide) {
+bool System::DetectExistingInstallation(
+    const Project& project,
+    std::string* out_uninstall_manifest,
+    std::string* out_installed_prefix)
+{
+    std::string home = JsEngine::DetectRealUserHome();
+    std::vector<std::string> prefixes = {
+        project.default_prefix,
+        "/usr/bin",
+        "/usr/local/bin",
+        home + "/.local/bin",
+        "/opt/" + project.app_name,
+        "/opt/" + project.app_id
+    };
+
+    std::vector<std::string> unique_prefixes;
+    for (const auto& p : prefixes) {
+        if (!p.empty() && std::find(unique_prefixes.begin(), unique_prefixes.end(), p) == unique_prefixes.end()) {
+            unique_prefixes.push_back(p);
+        }
+    }
+
+    // 1. Look for explicit uninstall manifest
+    for (const auto& p : unique_prefixes) {
+        std::vector<std::string> manifests = {
+            p + "/" + project.app_id + "-uninstall.json",
+            p + "/installzone-uninstall.json",
+            p + "/" + project.app_name + "-uninstall.json"
+        };
+        for (const auto& m : manifests) {
+            if (access(m.c_str(), R_OK) == 0) {
+                if (out_uninstall_manifest) *out_uninstall_manifest = m;
+                if (out_installed_prefix) *out_installed_prefix = p;
+                return true;
+            }
+        }
+    }
+
+    // 2. Check if primary executable exists in any prefix
+    std::string exec_name = project.desktop.exec_cmd;
+    if (exec_name.empty()) exec_name = project.app_name;
+    size_t sp = exec_name.find(' ');
+    if (sp != std::string::npos) exec_name = exec_name.substr(0, sp);
+
+    if (!exec_name.empty()) {
+        for (const auto& p : unique_prefixes) {
+            std::vector<std::string> cands = {
+                p + "/" + exec_name,
+                p + "/bin/" + exec_name
+            };
+            for (const auto& cand : cands) {
+                if (access(cand.c_str(), X_OK) == 0) {
+                    if (out_installed_prefix) *out_installed_prefix = p;
+                    return true;
+                }
+            }
+        }
+    }
+
+    // 3. Check if desktop entry exists
+    std::vector<std::string> ids;
+    if (!project.app_id.empty()) ids.push_back(project.app_id);
+    if (!project.app_name.empty() && project.app_name != project.app_id) ids.push_back(project.app_name);
+
+    for (const auto& id : ids) {
+        std::vector<std::string> desktop_candidates = {
+            "/usr/share/applications/" + id + ".desktop",
+            home + "/.local/share/applications/" + id + ".desktop"
+        };
+        for (const auto& d : desktop_candidates) {
+            if (access(d.c_str(), R_OK) == 0) {
+                std::string detected_dir = project.default_prefix;
+                std::ifstream fin(d);
+                std::string line;
+                while (std::getline(fin, line)) {
+                    if (line.rfind("Path=", 0) == 0) {
+                        detected_dir = line.substr(5);
+                        break;
+                    }
+                }
+                if (out_installed_prefix) *out_installed_prefix = detected_dir;
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+StatusCode System::RemoveDesktopEntry(const std::string& app_id, bool system_wide, const std::string& sudo_password) {
     std::string home = JsEngine::DetectRealUserHome();
     std::string apps_dir = system_wide ? "/usr/share/applications" : (home + "/.local/share/applications");
     std::string icons_dir = system_wide ? "/usr/share/icons/hicolor/scalable/apps" : (home + "/.local/share/icons/hicolor/scalable/apps");
     std::string pixmaps_dir = system_wide ? "/usr/share/pixmaps" : (home + "/.local/share/pixmaps");
 
     std::string desktop_file = apps_dir + "/" + app_id + ".desktop";
-    std::string icon_file = icons_dir + "/" + app_id + ".png";
-    std::string pixmap_file = pixmaps_dir + "/" + app_id + ".png";
+    std::string icon_file1 = icons_dir + "/" + app_id + ".png";
+    std::string icon_file2 = icons_dir + "/" + app_id + ".svg";
+    std::string pixmap_file1 = pixmaps_dir + "/" + app_id + ".png";
+    std::string pixmap_file2 = pixmaps_dir + "/" + app_id + ".svg";
 
     if (system_wide && !IsRoot()) {
-        RunElevatedCommand("rm -f \"" + desktop_file + "\" \"" + icon_file + "\" \"" + pixmap_file + "\"");
-        RunElevatedCommand("update-desktop-database \"" + apps_dir + "\" 2>/dev/null || true");
+        RunElevatedCommand("rm -f \"" + desktop_file + "\" \"" + icon_file1 + "\" \"" + icon_file2 + "\" \"" + pixmap_file1 + "\" \"" + pixmap_file2 + "\"", sudo_password);
+        RunElevatedCommand("update-desktop-database \"" + apps_dir + "\" 2>/dev/null || true", sudo_password);
+        RunElevatedCommand("gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true", sudo_password);
     } else {
         remove(desktop_file.c_str());
-        remove(icon_file.c_str());
-        remove(pixmap_file.c_str());
+        remove(icon_file1.c_str());
+        remove(icon_file2.c_str());
+        remove(pixmap_file1.c_str());
+        remove(pixmap_file2.c_str());
         IzSystem("update-desktop-database 2>/dev/null || true");
+        IzSystem("gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true");
     }
 
     return StatusCode::Success;
@@ -417,7 +512,11 @@ StatusCode System::GenerateUninstaller(
     return StatusCode::Success;
 }
 
-StatusCode System::PerformUninstall(const std::string& uninstall_json_path, LogCallback log_cb) {
+StatusCode System::PerformUninstall(
+    const std::string& uninstall_json_path,
+    LogCallback log_cb,
+    const std::string& sudo_password)
+{
     std::ifstream in(uninstall_json_path);
     if (!in.is_open()) {
         if (log_cb) log_cb("Error: Uninstall manifest not found: " + uninstall_json_path);
@@ -438,7 +537,7 @@ StatusCode System::PerformUninstall(const std::string& uninstall_json_path, LogC
 
     if (log_cb) log_cb("Uninstalling: " + app_name);
 
-    // Run Pre-Uninstall JS
+    // Run Pre-Uninstall JS Hook
     if (j.contains("scripts") && j["scripts"].contains("pre_uninstall")) {
         std::string pre_js = j["scripts"]["pre_uninstall"].get<std::string>();
         if (!pre_js.empty()) {
@@ -457,19 +556,26 @@ StatusCode System::PerformUninstall(const std::string& uninstall_json_path, LogC
     // Remove desktop entry & icons
     if (!app_id.empty()) {
         if (log_cb) log_cb("Removing desktop entry and application icons...");
-        RemoveDesktopEntry(app_id, system_wide);
+        RemoveDesktopEntry(app_id, system_wide, sudo_password);
+        if (app_name != app_id) {
+            RemoveDesktopEntry(app_name, system_wide, sudo_password);
+        }
     }
 
-    // Remove files
+    // Remove files (preserve system packages/dependencies!)
     if (j.contains("installed_files") && j["installed_files"].is_array()) {
         for (const auto& jf : j["installed_files"]) {
             std::string file_path = jf.get<std::string>();
             if (log_cb) log_cb("Deleting: " + file_path);
-            remove(file_path.c_str());
+            if (system_wide && !IsRoot()) {
+                RunElevatedCommand("rm -f \"" + file_path + "\"", sudo_password);
+            } else {
+                remove(file_path.c_str());
+            }
         }
     }
 
-    // Run Post-Uninstall JS
+    // Run Post-Uninstall JS Hook
     if (j.contains("scripts") && j["scripts"].contains("post_uninstall")) {
         std::string post_js = j["scripts"]["post_uninstall"].get<std::string>();
         if (!post_js.empty()) {
@@ -485,14 +591,24 @@ StatusCode System::PerformUninstall(const std::string& uninstall_json_path, LogC
         }
     }
 
-    // Delete uninstall manifest and folder
-    remove(uninstall_json_path.c_str());
-    if (!install_dir.empty()) {
-        std::string un_sh = install_dir + "/uninstall.sh";
-        remove(un_sh.c_str());
-        rmdir(install_dir.c_str());
+    // Delete uninstall manifest and standalone scripts
+    if (system_wide && !IsRoot()) {
+        RunElevatedCommand("rm -f \"" + uninstall_json_path + "\"", sudo_password);
+        if (!install_dir.empty()) {
+            RunElevatedCommand("rm -f \"" + install_dir + "/" + app_id + "-uninstall.sh\"", sudo_password);
+            RunElevatedCommand("rm -f \"" + install_dir + "/" + app_id + "-uninstall.json\"", sudo_password);
+            RunElevatedCommand("rm -f \"" + install_dir + "/uninstall.sh\"", sudo_password);
+        }
+    } else {
+        remove(uninstall_json_path.c_str());
+        if (!install_dir.empty()) {
+            remove((install_dir + "/" + app_id + "-uninstall.sh").c_str());
+            remove((install_dir + "/" + app_id + "-uninstall.json").c_str());
+            remove((install_dir + "/uninstall.sh").c_str());
+        }
     }
 
+    if (log_cb) log_cb("System dependencies (apt packages) were preserved.");
     if (log_cb) log_cb("Uninstallation completed successfully.");
     return StatusCode::Success;
 }
